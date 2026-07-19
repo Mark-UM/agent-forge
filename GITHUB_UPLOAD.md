@@ -423,7 +423,7 @@ git push
 2. 访问 `https://github.com/<你的用户名>/agent-forge/search?q=ghp_`
    - 应该无结果（无 GitHub Token 泄露）
 
-3. 访问 `https://github.com/<你的用户名>/agent-forge/search?q=17520246156`
+3. 访问 `https://github.com/<你的用户名>/agent-forge/search?q=<你的手机号>`
    - 应该无结果（无手机号泄露）
 
 4. 访问 `https://github.com/<你的用户名>/agent-forge/search?q=mingyang0010`
