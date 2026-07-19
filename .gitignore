@@ -113,23 +113,24 @@ temp/
 !_runtime/create-skill-junctions.ps1
 
 # ── 历史 legacy 残留（不应存在，防御性排除）─────────
-plugins/
-skills/
-workspace/
-bridge/
-api/
-detection/
-startup/
-_config/
-modules/flash_review/
-modules/dynamic-flash/
-modules/handoff/
-modules/integration/
-modules/memory/
-modules/monitoring/
-modules/translate/
-modules/tests/
-modules/utils/
+# 注意：使用前导 / 仅匹配根目录，避免误伤 .opencode/skills/
+/plugins/
+/skills/
+/workspace/
+/bridge/
+/api/
+/detection/
+/startup/
+/_config/
+/modules/flash_review/
+/modules/dynamic-flash/
+/modules/handoff/
+/modules/integration/
+/modules/memory/
+/modules/monitoring/
+/modules/translate/
+/modules/tests/
+/modules/utils/
 
 # ── 测试产物 ───────────────────────────────────────────
 test.png
