@@ -1,0 +1,145 @@
+# ============================================================
+# AgentForge — .gitignore
+# ============================================================
+
+# ── 敏感配置（绝不提交）─────────────────────────────────
+markconfig/secrets.json
+markconfig/secrets.*.json
+!markconfig/secrets.example.json
+*.key
+*.pem
+*.pfx
+.env
+.env.*
+
+# ── 个人画像（含隐私，不提交；仅提交 .example.md）──────
+markconfig/profile.md
+_data/memory/user-*.md
+_data/memory/MEMORY.md
+!_data/memory/MEMORY.example.md
+!markconfig/profile.example.md
+
+# ── 运行时数据 ─────────────────────────────────────────
+_runtime/
+_state/
+.omo/
+*.log
+*.jsonl
+*.db
+*.sqlite
+*.sqlite3
+
+# ── 上下文交接包（含会话敏感信息）─────────────────────
+_runtime/handoff/
+
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ── 虚拟环境 ───────────────────────────────────────────
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# ── Node.js / Bun ──────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn-integrity
+
+# ── IDE / 编辑器 ───────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── OS ─────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ── 临时文件 ───────────────────────────────────────────
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+*.rej
+.cache/
+tmp/
+temp/
+
+# ── Skills 外部仓库（避免提交大量第三方代码）─────────
+.opencode/skills/anthropics-skills/
+.opencode/skills/obra-superpowers/
+.opencode/skills/mattpocock-skills/
+.opencode/skills/vercel-agent-skills/
+
+# 但保留 junctions 脚本（可重建 junctions）
+!.opencode/skills/memory-context/
+!_runtime/create-skill-junctions.ps1
+
+# ── 历史 legacy 残留（不应存在，防御性排除）─────────
+plugins/
+skills/
+workspace/
+bridge/
+api/
+detection/
+startup/
+_config/
+modules/flash_review/
+modules/dynamic-flash/
+modules/handoff/
+modules/integration/
+modules/memory/
+modules/monitoring/
+modules/translate/
+modules/tests/
+modules/utils/
+
+# ── 测试产物 ───────────────────────────────────────────
+test.png
+test.jpg
+test.pdf
+screenshot.png
+*.screenshot.png
+
+# ── Lock files（按需保留 package-lock.json）─────────
+# package-lock.json
+# pnpm-lock.yaml
+# yarn.lock
+bun.lockb

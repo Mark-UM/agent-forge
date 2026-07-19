@@ -1,0 +1,7 @@
+{
+  "name": "vision",
+  "description": "图片识别，调用硅基流动 Qwen3-VL-Plus 模型",
+  "version": "1.0",
+  "entry": "recognize.py",
+  "tools": ["recognize.py", "clipboard.py"]
+}

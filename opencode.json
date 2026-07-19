@@ -1,0 +1,107 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "deepseek/deepseek-v4-pro",
+  "small_model": "deepseek/deepseek-v4-flash",
+  "permission": {
+    "edit": "allow",
+    "bash": "ask",
+    "write": "allow"
+  },
+  "instructions": [
+    "AGENTS.md",
+    "markconfig/profile.md"
+  ],
+  "watcher": {
+    "ignore": ["node_modules/**", "plugins/**", "skills/**", "workspace/**", "_state/**", "_runtime/**", "__pycache__/**", ".opencode/skills/**/node_modules/**", ".opencode/skills/**/.git/**"]
+  },
+  "plugin": [
+    "oh-my-opencode@latest",
+    "@tarquinen/opencode-dcp",
+    "opencode-antigravity-auth@latest"
+  ],
+  "mcp": {
+    "filesystem": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "E:/system_folder/.claude/.claude", "E:/system_folder", "E:/"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "github": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/sse",
+      "enabled": true
+    },
+    "sequential-thinking": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "memory": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
+      "environment": {
+        "MEMORY_FILE_PATH": "E:/system_folder/.claude/.claude/_runtime/mcp-memory.json"
+      },
+      "enabled": true,
+      "timeout": 30000
+    },
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp@latest"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "fetch": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-fetch"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "sqlite": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-sqlite", "E:/system_folder/.claude/.claude/_runtime/mcp-sqlite.db"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "time": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-time"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "git": {
+      "type": "local",
+      "command": ["C:/Users/mingy/AppData/Local/Programs/Python/Python311/python.exe", "-m", "mcp_server_git", "--repository", "E:/system_folder/.claude/.claude"],
+      "enabled": true,
+      "timeout": 10000
+    },
+    "duckduckgo": {
+      "type": "local",
+      "command": ["C:/Users/mingy/AppData/Local/Programs/Python/Python311/python.exe", "-m", "duckduckgo_mcp_server"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "searxng": {
+      "type": "local",
+      "command": ["npx", "-y", "mcp-searxng"],
+      "environment": {
+        "SEARXNG_URL": "https://searx.be"
+      },
+      "enabled": true,
+      "timeout": 30000
+    },
+    "g-search": {
+      "type": "local",
+      "command": ["npx", "-y", "g-search-mcp"],
+      "enabled": true,
+      "timeout": 60000
+    }
+  }
+}
