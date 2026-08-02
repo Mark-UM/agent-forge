@@ -1,38 +1,48 @@
-# ============================================================
-# AgentForge — .gitignore
-# ============================================================
-
-# ── 敏感配置（绝不提交）─────────────────────────────────
+# Sensitive local configuration
 markconfig/secrets.json
 markconfig/secrets.*.json
 !markconfig/secrets.example.json
+markconfig/profile.md
+markconfig/paths.json
 *.key
 *.pem
 *.pfx
 .env
 .env.*
 
-# ── 个人画像（含隐私，不提交；仅提交 .example.md）──────
-markconfig/profile.md
-_data/memory/user-*.md
+# Private/local memory
 _data/memory/MEMORY.md
+_data/memory/user-*.md
+_data/memory/lessons.md
+_data/memory/decisions.md
 !_data/memory/MEMORY.example.md
-!markconfig/profile.example.md
 
-# ── 运行时数据 ─────────────────────────────────────────
+# Runtime and generated state
 _runtime/
 _state/
-.omo/
+AGENTS_COMPOSED.md
 *.log
 *.jsonl
 *.db
 *.sqlite
 *.sqlite3
 
-# ── 上下文交接包（含会话敏感信息）─────────────────────
-_runtime/handoff/
+# Local caches and disposable workspaces
+.codegraph/
+.omo/
+.playwright-mcp/
+.pytest_cache/
+.cache/
+backups/
+file-history/
+projects/
+session-env/
+sessions/
+shell-snapshots/
+tmp/
+temp/
 
-# ── Python ─────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -54,8 +64,6 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
-# ── 虚拟环境 ───────────────────────────────────────────
 venv/
 env/
 ENV/
@@ -63,57 +71,31 @@ env.bak/
 venv.bak/
 .venv/
 
-# ── Node.js / Bun ──────────────────────────────────────
+# Node.js and package-manager state
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-.npm
+.npm/
 .yarn-integrity
+bun.lockb
 
-# ── IDE / 编辑器 ───────────────────────────────────────
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# ── OS ─────────────────────────────────────────────────
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# ── 临时文件 ───────────────────────────────────────────
-*.tmp
-*.temp
-*.bak
-*.old
-*.orig
-*.rej
-.cache/
-tmp/
-temp/
-
-# ── Skills 外部仓库（避免提交大量第三方代码）─────────
+# Optional local dependency/source trees
+vendor/
+MindSearch/
 .opencode/skills/anthropics-skills/
 .opencode/skills/obra-superpowers/
 .opencode/skills/mattpocock-skills/
 .opencode/skills/vercel-agent-skills/
 
-# 但保留 junctions 脚本（可重建 junctions）
-!.opencode/skills/memory-context/
-!_runtime/create-skill-junctions.ps1
+# Junctions projected from the four ignored upstream skill repositories
+.opencode/skills/anthropics-*/
+.opencode/skills/obra-*/
+.opencode/skills/matt-*/
+.opencode/skills/vercel-*/
 
-# ── 历史 legacy 残留（不应存在，防御性排除）─────────
-# 注意：使用前导 / 仅匹配根目录，避免误伤 .opencode/skills/
+# Legacy OpenCode directories that do not belong in this repository
 /plugins/
 /skills/
 /workspace/
@@ -126,21 +108,35 @@ temp/
 /modules/dynamic-flash/
 /modules/handoff/
 /modules/integration/
-/modules/memory/
 /modules/monitoring/
 /modules/translate/
 /modules/tests/
 /modules/utils/
 
-# ── 测试产物 ───────────────────────────────────────────
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Temporary and test artifacts
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+*.rej
 test.png
 test.jpg
 test.pdf
 screenshot.png
 *.screenshot.png
-
-# ── Lock files（按需保留 package-lock.json）─────────
-# package-lock.json
-# pnpm-lock.yaml
-# yarn.lock
-bun.lockb

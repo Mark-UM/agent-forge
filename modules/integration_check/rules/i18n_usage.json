@@ -1,0 +1,18 @@
+{
+  "name": "i18n_usage",
+  "severity": "error",
+  "description": "src/ui/**/*.ts files with hardcoded user-facing text not wrapped in t()",
+  "source": "Section 3.2 Direction 3 — 集成链路强制检查 #5: i18n 接入",
+  "detection": {
+    "method": "regex",
+    "file_scope": "src/ui/**/*.ts",
+    "patterns": {
+      "i18n_import": "(?:import\\s*\\{[^}]*\\bt\\b[^}]*\\}\\s*from\\s*['\"]@/i18n['\"]|import\\s*\\{[^}]*\\bt\\b[^}]*\\}\\s*from\\s*['\"].*i18n['\"])",
+      "i18n_call": "\\bt\\s*\\(\\s*['\"]([^'\"]+)['\"]",
+      "hardcoded_text": "(?:innerHTML\\s*=\\s*['\"]([^'\"]{2,})['\"]|textContent\\s*=\\s*['\"]([^'\"]{2,})['\"]|innerText\\s*=\\s*['\"]([^'\"]{2,})['\"])"
+    }
+  },
+  "rationale": "Tower Stack 3D fatal bug: HUD panel showed hardcoded English text in i18n-disabled builds, breaking Chinese locale. The 'form compliance trap' produces the panel class but skips wiring text through t().",
+  "whitelistable": true,
+  "whitelist_key": "i18n_usage"
+}

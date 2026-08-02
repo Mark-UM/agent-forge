@@ -1,0 +1,82 @@
+---
+description: Provider-aware search procedure with privacy, history, quality, and optional academic/deep stages
+argument-hint: "[--no-cache] [--save] [--recent N] [--deep] [--aggregate] [--parallel] [--stream] [--i18n] [--academic] [--s2] <query>"
+agent: build
+---
+
+# /search — Search Procedure
+
+This Slash Command is interpreted by the active agent. It is not a direct
+binding to `SearchOrchestrator` and must not claim deterministic execution of
+every Python stage.
+
+## Provider state
+
+Read `opencode.json` at execution time. In the current repository:
+
+- enabled general web providers: `searxng`, `serper`;
+- enabled specialized providers: `context7`, `github`, `arxiv`,
+  `semantic_scholar`;
+- disabled rollback definitions: `duckduckgo`, `g-search`.
+
+Do not call a disabled provider or infer provider availability from archived
+layer documents. Serper also requires `SERPER_API_KEY`; every remote provider
+may still fail because of network or service state.
+
+## Procedure
+
+1. Parse the query and flags. Reject an empty query.
+2. Run outbound redaction with `modules.search.privacy.redact_outbound` before
+   sending query text to any external MCP/API. If redaction fails, stop rather
+   than sending unreviewed text.
+3. Unless `--no-cache` is set, query the local cache through
+   `python -m modules.search.search cache-get`.
+4. Choose providers from current configuration:
+   - library/framework documentation: prefer Context7;
+   - repository/code questions: prefer GitHub;
+   - general web: use SearXNG and/or Serper;
+   - `--academic`: add arXiv;
+   - `--s2`: add Semantic Scholar.
+5. Optional stages:
+   - `--deep`: use `modules.search.planner` to produce bounded subqueries;
+   - `--i18n`: use `modules.search.i18n` for language expansion;
+   - `--parallel` or `--stream`: coordinate actual MCP calls at the agent
+     level. The similarly named Python helpers require injected callables and
+     do not discover OpenCode MCP tools themselves.
+6. Normalize and deduplicate URLs with Search utilities, apply recency where
+   provider metadata supports it, and score returned results with
+   `modules.search.quality`.
+7. When verification conditions are met, cross-check official/authoritative
+   sources. `modules.search.verifier` requires a supplied fetch callback; it is
+   not a standalone web client.
+8. With `--aggregate`, synthesize the collected results through
+   `modules.search.aggregator`; otherwise return a source-linked result list.
+9. Record the redacted query and result metadata with
+   `python -m modules.search.search log`. Logs are dated files under
+   `_runtime/search/`.
+10. With `--save`, mark the matching history entry saved. With an explicit
+    memory request, persist only redacted summaries—never raw sensitive text.
+
+## Output contract
+
+State which providers actually returned results, any degraded/skipped stage,
+the quality assessment, and direct source URLs. Configured or attempted is not
+the same as successful.
+
+## Local utility commands
+
+```powershell
+python -m modules.search.search recent --limit 20 --days 7
+python -m modules.search.search stats --days 30
+python -m modules.search.search find --query "keyword"
+python -m modules.search.search save --query "keyword"
+python -m modules.search.search cache-clean
+python -m modules.search.search health
+python -m modules.search.export export --format json
+python -m modules.search.export export --format csv --output search.csv
+python -m modules.search.prewarm run --dry-run
+python -m modules.search.orchestrator "query" --dry-run
+```
+
+The last command prints/plans the Python pipeline. Without injected callbacks,
+it does not perform the same live MCP search as this Slash Command.

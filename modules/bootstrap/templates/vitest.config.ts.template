@@ -1,0 +1,58 @@
+import { defineConfig } from 'vitest/config';
+import { resolve } from 'node:path';
+
+// vitest.config.ts — project-bootstrap generated (Phase 3A Direction 1)
+// MANDATORY: coverage.thresholds ≥85% across statements/branches/functions/lines
+//            coverage.include = ['src/**/*.ts']
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    include: ['src/**/*.spec.ts', 'src/**/*.test.ts', 'tests/**/*.spec.ts'],
+    exclude: ['node_modules', 'dist', 'coverage'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'json-summary', 'lcov'],
+      reportsDirectory: './coverage',
+      include: ['src/**/*.ts'],
+      exclude: [
+        'src/**/*.spec.ts',
+        'src/**/*.test.ts',
+        'src/main.ts',
+        'src/**/index.ts',
+        'src/**/types.ts',
+        'src/**/*.d.ts',
+      ],
+      thresholds: {
+        statements: 85,
+        branches: 85,
+        functions: 85,
+        lines: 85,
+        perFile: false,
+      },
+      all: true,
+      watermarks: {
+        statements: [80, 95],
+        branches: [80, 95],
+        functions: [80, 95],
+        lines: [80, 95],
+      },
+    },
+    setupFiles: ['./tests/setup.ts'],
+    globalsCoverage: true,
+    reporters: ['default', 'junit'],
+    outputFile: './coverage/junit.xml',
+  },
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+      '@core': resolve(__dirname, 'src/core'),
+      '@render': resolve(__dirname, 'src/render'),
+      '@ui': resolve(__dirname, 'src/ui'),
+      '@i18n': resolve(__dirname, 'src/i18n'),
+      '@utils': resolve(__dirname, 'src/utils'),
+      '@services': resolve(__dirname, 'src/services'),
+    },
+  },
+});

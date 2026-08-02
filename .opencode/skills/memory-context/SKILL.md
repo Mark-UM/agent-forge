@@ -1,13 +1,14 @@
 ---
-description: Load Mark's structured memory files for personalized context
+description: Load ignored local structured memory only when personalized context is required
 ---
 
 # Memory Context Skill
 
-When you need detailed personal context about the user (Mark), read the following memory files:
+When a task requires detailed personal context, read only the relevant ignored
+local memory files. They may not exist in a clean clone.
 
 ## Primary Memory Files
-- `_data/memory/MEMORY.md` — Core memory summary (always loaded via instructions)
+- `_data/memory/MEMORY.md` — optional core memory summary
 - `_data/memory/user-profile.md` — Detailed user profile
 - `_data/memory/user-personality.md` — Personality traits and communication preferences
 - `_data/memory/user-tech-stack.md` — Technical skills and stack details
@@ -17,11 +18,11 @@ When you need detailed personal context about the user (Mark), read the followin
 
 ## Configuration Files
 - `markconfig/profile.md` — Personal profile (loaded via opencode.json instructions)
-- `markconfig/paths.json` — System paths
 - `markconfig/secrets.json` — API keys (never display or log these)
 
 ## Usage
-- For general tasks: `markconfig/profile.md` is auto-loaded. Sufficient.
+- For general tasks: `markconfig/profile.md` is loaded by `opencode.json` when present.
 - For personalized advice: Read relevant `_data/memory/user-*.md` files.
 - For career/tech guidance: Read `user-career.md` and `user-tech-stack.md`.
 - Never log or display contents of `secrets.json`.
+- Never assume any private memory file exists or is safe to commit.

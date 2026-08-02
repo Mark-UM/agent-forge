@@ -1,0 +1,17 @@
+{
+  "name": "event_balance",
+  "severity": "error",
+  "description": "eventBus.emit('X') without matching eventBus.on('X', ...) somewhere in the codebase",
+  "source": "Section 3.2 Direction 3 — 集成链路强制检查 #2: 事件 payload 语义",
+  "detection": {
+    "method": "regex",
+    "patterns": {
+      "emit": "(?:eventBus|EventBus|bus|eventEmitter)\\.(?:emit|dispatch|trigger)\\s*\\(\\s*['\"]([^'\"]+)['\"]",
+      "subscribe": "(?:eventBus|EventBus|bus|eventEmitter)\\.(?:on|subscribe|addEventListener)\\s*\\(\\s*['\"]([^'\"]+)['\"]"
+    },
+    "event_name_group": 1
+  },
+  "rationale": "Tower Stack 3D fatal bug: emit('game:over') sent payload that no subscriber consumed, causing UI to never update. The 'form compliance trap' produces emit() calls but skips the matching on() handlers.",
+  "whitelistable": true,
+  "whitelist_key": "event_balance"
+}

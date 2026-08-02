@@ -1,0 +1,16 @@
+{
+  "name": "cross_layer_call",
+  "severity": "warning",
+  "description": "main.ts directly calling Render layer methods (bypassing EventBus)",
+  "source": "Section 3.2 Direction 3 — 集成链路强制检查 #4: 跨层调用链路",
+  "detection": {
+    "method": "regex",
+    "main_files": ["src/main.ts", "src/index.ts", "src/bootstrap.ts"],
+    "patterns": {
+      "render_call": "\\b(?:renderer|render|scene|camera|mesh)\\w*\\.\\w+\\s*\\("
+    }
+  },
+  "rationale": "Tower Stack 3D architecture violation: main.ts directly calls renderer.render() instead of dispatching via EventBus, creating tight coupling between bootstrap and render layer. EventBus should be the only channel between business logic and rendering.",
+  "whitelistable": true,
+  "whitelist_key": "cross_layer_call"
+}

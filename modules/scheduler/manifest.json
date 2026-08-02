@@ -1,0 +1,20 @@
+{
+  "module": "scheduler",
+  "version": "1.8.0",
+  "entry_point": "python -m modules.scheduler.daemon",
+  "bind": "127.0.0.1:9225",
+  "persistence": "_runtime/scheduler/jobs.json",
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": ["APScheduler>=3.10,<4"]
+  },
+  "job_types": {
+    "file_reindex": "implemented",
+    "report_collect": "implemented, subject to collection pipeline limitations",
+    "action_extract": "implemented",
+    "custom": "implemented for an explicit module whitelist",
+    "memory_review": "placeholder that returns a not-implemented detail",
+    "pattern_extract": "reserved name with no execution branch"
+  },
+  "fallback": "Without APScheduler the HTTP service reports stub mode"
+}

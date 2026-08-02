@@ -1,0 +1,50 @@
+{
+  "module": "prompt",
+  "version": "1.5.0",
+  "description": "Dynamic OpenCode prompt composition and task/context selection",
+  "entry_points": {
+    "compose": "python -m modules.prompt.composer",
+    "pre_session": "python -m modules.prompt.composer --pre-session",
+    "list_tasks": "python -m modules.prompt.composer --list-tasks",
+    "experiment_stats": "python -m modules.prompt.experiments --stats"
+  },
+  "components": [
+    "classify.py",
+    "composer.py",
+    "context.py",
+    "experiments.py",
+    "log.py"
+  ],
+  "layers": [
+    "base",
+    "profile",
+    "task",
+    "context",
+    "example",
+    "local profile when present"
+  ],
+  "task_types": [
+    "coding",
+    "review",
+    "research",
+    "debugging",
+    "planning",
+    "writing",
+    "automation",
+    "delivery"
+  ],
+  "runtime_outputs": [
+    "AGENTS_COMPOSED.md",
+    "_runtime/prompt/composition_log.jsonl",
+    "_runtime/prompt/experiments.jsonl",
+    "_runtime/prompt/version.json"
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": ["DeepSeek-compatible HTTP endpoint for model-assisted classification"]
+  },
+  "limitations": [
+    "AGENTS.md routing rules and the composer are separate procedural entry points",
+    "review and delivery orchestration are Markdown procedures, not enforced by this module"
+  ]
+}

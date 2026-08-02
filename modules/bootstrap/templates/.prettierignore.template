@@ -1,0 +1,12 @@
+dist/
+node_modules/
+coverage/
+build/
+.next/
+*.min.js
+*.min.css
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+public/
+src/i18n/locales.ts

@@ -1,0 +1,13 @@
+{
+  "module": "memory",
+  "version": "1.0.0",
+  "entry_point": "modules.memory.hook",
+  "description": "Atomic append helpers for ignored lessons/decision files and local memory health reporting",
+  "dependencies": ["Python standard library"],
+  "writes": [
+    "_data/memory/lessons.md",
+    "_data/memory/decisions.md",
+    "_runtime/memory/adr_counter.txt"
+  ],
+  "activation": "library calls only; no automatic hook registration is implemented"
+}

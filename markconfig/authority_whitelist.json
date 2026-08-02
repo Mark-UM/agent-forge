@@ -1,0 +1,117 @@
+{
+  "_comment": "Optional Search v4.4 domain/source override loaded by modules/search/quality.py.",
+  "_version": "1.0",
+  "_updated_at": "2026-08-02",
+  "_tiers": {
+    "L1": "Configured official/authoritative sources with score 3.",
+    "L2": "Configured organizations, instructors, and mailing lists with score 2.",
+    "L3": "Configured code hosting, personal sources, and notes with score 1.",
+    "L4": "Configured blogs, forums, and aggregators with score 1."
+  },
+  "L1": {
+    "domains": [
+      "handbook.monash.edu",
+      "moodle.monash.edu",
+      "monash.edu",
+      "policy.monash.edu",
+      "docs.python.org",
+      "developer.mozilla.org",
+      "react.dev",
+      "angular.io",
+      "vuejs.org",
+      "kubernetes.io",
+      "golang.org",
+      "rust-lang.org",
+      "typescriptlang.org",
+      "nodejs.org",
+      "docs.microsoft.com",
+      "learn.microsoft.com",
+      "aws.amazon.com",
+      "cloud.google.com",
+      "azure.microsoft.com",
+      "w3.org",
+      "ietf.org",
+      "ecma-international.org",
+      "iso.org",
+      "ieee.org",
+      "acm.org",
+      "arxiv.org",
+      "semanticscholar.org",
+      "scholar.google.com",
+      "doi.org"
+    ],
+    "source_fields": ["official-docs", "official_docs", "official", "handbook", "moodle"],
+    "score": 3
+  },
+  "L2": {
+    "domains": [
+      "users.monash.edu",
+      "mail-archive.com",
+      "apache.org",
+      "fsf.org",
+      "kernel.org",
+      "postgresql.org",
+      "mysql.com",
+      "redis.io",
+      "mongodb.com"
+    ],
+    "source_fields": ["instructor", "mailing-list"],
+    "score": 2
+  },
+  "L3": {
+    "domains": [
+      "github.com",
+      "gitlab.com",
+      "gitee.com",
+      "bitbucket.org",
+      "codeberg.org",
+      "sourcehut.org",
+      "gist.github.com",
+      "pastebin.com",
+      "paste.ubuntu.com"
+    ],
+    "source_fields": ["github", "personal", "student-notes", "gist"],
+    "score": 1
+  },
+  "L4": {
+    "domains": [
+      "medium.com",
+      "dev.to",
+      "reddit.com",
+      "stackoverflow.com",
+      "stackexchange.com",
+      "quora.com",
+      "zhihu.com",
+      "csdn.net",
+      "jianshu.com",
+      "juejin.cn",
+      "news.ycombinator.com",
+      "freecodecamp.org",
+      "tutorialspoint.com",
+      "geeksforgeeks.org",
+      "w3schools.com",
+      "baeldung.com",
+      "dzone.com"
+    ],
+    "source_fields": ["blog", "medium", "forum", "stackoverflow", "reddit", "news"],
+    "score": 1
+  },
+  "github_org_whitelist": [
+    "python",
+    "microsoft",
+    "facebook",
+    "google",
+    "angular",
+    "vuejs",
+    "rust-lang",
+    "golang",
+    "nodejs",
+    "kubernetes",
+    "apache",
+    "opencv",
+    "tensorflow",
+    "pytorch"
+  ],
+  "_github_org_promotion_tier": "L2",
+  "_github_org_promotion_score": 2
+}

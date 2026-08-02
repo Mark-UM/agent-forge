@@ -1,17 +1,19 @@
 ---
-description: Start the browser daemon (Playwright + Firefox) for browser automation
+description: Start the local Playwright/Firefox Browser daemon
 agent: build
 ---
 
 # /browser — Start Browser Daemon
 
-Start the browser daemon in the background. The daemon runs on port 9223 and provides HTTP API for browser automation.
+Start the daemon as a background process from the repository root:
 
-Run the following command in background:
+```powershell
+Start-Process python -ArgumentList '-m','modules.browser.daemon' -WindowStyle Hidden
 ```
-start /B "" "C:\Users\mingy\AppData\Local\Programs\Python\Python311\python.exe" modules/browser/daemon.py
-```
 
-Wait 2 seconds, then verify the daemon is running by checking `http://127.0.0.1:9223/ping`.
+Then call `http://127.0.0.1:9223/ping`. If it responds, report the current
+status. If the port is already serving the daemon, do not start another copy.
 
-Report the daemon status to the user. If already running, report "Browser daemon already running".
+The custom Browser tools only call the HTTP API; they never auto-start this
+process. The daemon uses the Firefox executable/profile constants currently
+defined in `modules/browser/daemon.py` and requires Playwright.

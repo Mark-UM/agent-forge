@@ -1,0 +1,18 @@
+{
+  "name": "state_cleanup",
+  "severity": "error",
+  "description": "requestAnimationFrame used in code with PAUSED state but no cancelAnimationFrame",
+  "source": "Section 3.2 Direction 3 — 集成链路强制检查 #3: 状态切换副作用",
+  "detection": {
+    "method": "regex",
+    "patterns": {
+      "raf_call": "requestAnimationFrame\\s*\\(",
+      "raf_cancel": "cancelAnimationFrame\\s*\\(",
+      "paused_state": "(?:['\"]PAUSED['\"]|GameState\\.PAUSED|State\\.PAUSED|===\\s*'PAUSED')"
+    },
+    "scope": "per_file"
+  },
+  "rationale": "Tower Stack 3D fatal bug: requestAnimationFrame kept running in PAUSED state because the code only had `if (state !== PAUSED) return` instead of cancelAnimationFrame. This caused CPU drain and visual freeze on pause.",
+  "whitelistable": true,
+  "whitelist_key": "state_cleanup"
+}

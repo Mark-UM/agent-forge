@@ -1,0 +1,66 @@
+import { defineConfig } from 'vite';
+import terser from '@rollup/plugin-terser';
+import { resolve } from 'node:path';
+
+// vite.config.ts — project-bootstrap generated (Phase 3A Direction 1)
+// MANDATORY: minify='terser' + drop_console + drop_debugger + manualChunks: { three: ['three'] }
+
+export default defineConfig({
+  plugins: [],
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+      '@core': resolve(__dirname, 'src/core'),
+      '@render': resolve(__dirname, 'src/render'),
+      '@ui': resolve(__dirname, 'src/ui'),
+      '@i18n': resolve(__dirname, 'src/i18n'),
+      '@utils': resolve(__dirname, 'src/utils'),
+      '@services': resolve(__dirname, 'src/services'),
+    },
+  },
+  build: {
+    target: 'es2022',
+    outDir: 'dist',
+    sourcemap: true,
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: true,
+        drop_debugger: true,
+        passes: 2,
+        pure_funcs: ['console.log', 'console.info', 'console.debug'],
+      },
+      format: {
+        comments: false,
+      },
+    },
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          three: ['three'],
+          'three-addons': ['three/addons/loaders/GLTFLoader.js', 'three/addons/postprocessing/EffectComposer.js'],
+          vendor: ['eventemitter3'],
+        },
+        chunkFileNames: 'assets/js/[name]-[hash].js',
+        entryFileNames: 'assets/js/[name]-[hash].js',
+        assetFileNames: 'assets/[ext]/[name]-[hash].[ext]',
+      },
+    },
+    chunkSizeWarningLimit: 1000,
+    cssCodeSplit: true,
+    assetsInlineLimit: 4096,
+  },
+  server: {
+    port: 5173,
+    strictPort: false,
+    open: false,
+    cors: true,
+  },
+  optimizeDeps: {
+    include: ['three', 'eventemitter3'],
+    exclude: [],
+  },
+  define: {
+    __DEV__: JSON.stringify(process.env.NODE_ENV !== 'production'),
+  },
+});

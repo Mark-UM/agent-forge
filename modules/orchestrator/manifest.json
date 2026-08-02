@@ -1,0 +1,19 @@
+{
+  "module": "orchestrator",
+  "version": "1.8.0",
+  "description": "Local collection, file indexing, action extraction, and schedule storage helpers",
+  "components": {
+    "agent_wrapper.py": "Collection pipeline; current browser-use branch is a placeholder and falls back to the Browser daemon",
+    "file_indexer.py": "Optional ChromaDB-backed Markdown/text indexing",
+    "action_extractor.py": "Model-assisted action extraction with schedule persistence",
+    "schedule_store.py": "SQLite schedule CRUD under _runtime/mcp-sqlite.db"
+  },
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": ["chromadb", "local Browser daemon", "Vision dependencies", "DeepSeek API key"]
+  },
+  "limitations": [
+    "browser-use Agent LLM integration is not implemented",
+    "collection fallback requires the Browser daemon to be started separately"
+  ]
+}

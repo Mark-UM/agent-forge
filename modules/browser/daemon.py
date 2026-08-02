@@ -76,13 +76,31 @@ def _validate_url(url):
 
 
 def _validate_screenshot_path(filepath):
-    """验证截图保存路径是否在白名单目录内。"""
+    """验证截图保存路径是否在白名单目录内。
+
+    B3 fix: 原实现用 str.startswith 检查路径前缀，存在 path traversal
+    风险（如允许 `MODULE_DIR` 时，`MODULE_DIR_evil/x.png` 也会通过）。
+    改用 os.path.realpath + os.path.commonpath 做严格的目录归属检查。
+    commonpath 是规范推荐的路径包含判断方法，避免前缀匹配的歧义。
+    """
     if not filepath:
         return os.path.join(MODULE_DIR, "screenshot.png")
-    abs_path = os.path.abspath(filepath)
+    # realpath 解析符号链接、`.`、`..` 等相对引用
+    abs_path = os.path.realpath(filepath)
     for allowed in SCREENSHOT_ALLOWED_DIRS:
-        if abs_path.startswith(allowed):
+        allowed_real = os.path.realpath(allowed)
+        # 必须严格等于白名单目录，或是其子路径
+        if abs_path == allowed_real:
             return abs_path
+        # 用 os.path.commonpath 做严格目录归属判断
+        # commonpath([a, b]) == allowed_real 意味着 allowed_real 是 abs_path 的祖先目录
+        try:
+            common = os.path.commonpath([abs_path, allowed_real])
+            if common == allowed_real:
+                return abs_path
+        except ValueError:
+            # 跨盘符 (Windows) 或不同根目录 — 一定不在白名单内
+            continue
     raise ValueError(f"截图路径不在允许的目录内: {abs_path}")
 
 

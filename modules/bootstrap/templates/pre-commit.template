@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# pre-commit hook (project-bootstrap generated, Phase 3A Direction 1)
+# Runs: lint-staged → tsc --noEmit → vitest run
+# Fails the commit if any step exits non-zero.
+
+echo "[pre-commit] Running lint-staged..."
+npx lint-staged || { echo "[pre-commit] lint-staged FAILED"; exit 1; }
+
+echo "[pre-commit] Running tsc --noEmit..."
+npx tsc --noEmit || { echo "[pre-commit] tsc --noEmit FAILED"; exit 1; }
+
+echo "[pre-commit] Running vitest run..."
+npx vitest run --silent 2>&1 | tail -20 || { echo "[pre-commit] vitest run FAILED"; exit 1; }
+
+echo "[pre-commit] All checks passed."

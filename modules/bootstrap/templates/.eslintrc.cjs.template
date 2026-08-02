@@ -1,0 +1,111 @@
+// .eslintrc.cjs — project-bootstrap generated (Phase 3A Direction 1)
+// MANDATORY: zero rules set to 'off'. To disable a rule, add TODO(<issue>) + issue link.
+module.exports = {
+  root: true,
+  env: {
+    browser: true,
+    es2022: true,
+    node: true,
+  },
+  extends: [
+    'eslint:recommended',
+    'plugin:@typescript-eslint/recommended',
+    'plugin:@typescript-eslint/recommended-requiring-type-checking',
+    'plugin:import/recommended',
+    'plugin:import/typescript',
+    'prettier',
+  ],
+  parser: '@typescript-eslint/parser',
+  parserOptions: {
+    ecmaVersion: 2022,
+    sourceType: 'module',
+    project: ['./tsconfig.json'],
+  },
+  plugins: ['@typescript-eslint', 'import'],
+  settings: {
+    'import/resolver': {
+      typescript: { project: './tsconfig.json' },
+    },
+  },
+  rules: {
+    // Type safety — no `any` ever
+    '@typescript-eslint/no-explicit-any': 'error',
+    '@typescript-eslint/no-unsafe-assignment': 'error',
+    '@typescript-eslint/no-unsafe-member-access': 'error',
+    '@typescript-eslint/no-unsafe-call': 'error',
+    '@typescript-eslint/no-unsafe-return': 'error',
+    '@typescript-eslint/no-unsafe-argument': 'error',
+    // Named exports only (better refactoring & tree-shaking)
+    'import/no-default-export': 'error',
+    'import/prefer-default-export': 'off',
+    // Architecture: forbid three/DOM in src/core/**
+    'no-restricted-imports': [
+      'error',
+      {
+        paths: [
+          {
+            name: 'three',
+            message: 'Core layer must be environment-agnostic. Move three imports to src/render/**.',
+          },
+          {
+            name: 'three/addons',
+            message: 'Core layer must be environment-agnostic. Move three imports to src/render/**.',
+          },
+        ],
+        patterns: [
+          {
+            group: ['three/*', 'three/addons/*'],
+            message: 'Core layer must be environment-agnostic.',
+          },
+        ],
+      },
+    ],
+    'no-restricted-globals': [
+      'error',
+      {
+        name: 'window',
+        message: 'Use EventBus instead of window globals.',
+      },
+      {
+        name: 'document',
+        message: 'Use UIManager / Render layer instead of direct document access.',
+      },
+    ],
+    'no-restricted-syntax': [
+      'error',
+      {
+        selector: "TSAsExpression[typeAnnotation.typeName.name='unknown'] > TSAsExpression",
+        message: 'Avoid (window as unknown as ...) global exposure — use EventBus.',
+      },
+    ],
+    // Discipline
+    '@typescript-eslint/no-unused-vars': [
+      'error',
+      { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+    ],
+    '@typescript-eslint/consistent-type-imports': 'error',
+    'no-console': ['warn', { allow: ['warn', 'error'] }],
+    'no-debugger': 'error',
+    eqeqeq: ['error', 'always'],
+    curly: ['error', 'all'],
+  },
+  overrides: [
+    {
+      // Allow console.log in scripts/ and vite config
+      files: ['scripts/**/*.ts', 'vite.config.ts', 'vitest.config.ts'],
+      rules: { 'no-console': 'off' },
+    },
+    {
+      // Allow default export in entry points
+      files: ['src/main.ts'],
+      rules: { 'import/no-default-export': 'off' },
+    },
+  ],
+  ignorePatterns: [
+    'dist/',
+    'node_modules/',
+    'coverage/',
+    '*.min.js',
+    '*.cjs',
+  ],
+};

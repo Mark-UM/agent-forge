@@ -1,0 +1,18 @@
+# Runtime dependencies used by optional AgentForge features.
+# Core prompt, policy, search-history, and local MCP utilities use the standard library.
+
+# Local Browser daemon
+playwright>=1.45
+
+# Vision clipboard and PDF adapters
+Pillow>=10
+PyMuPDF>=1.24
+
+# Semantic search and file indexing
+chromadb>=0.5
+
+# Scheduler daemon (the daemon runs in explicit stub mode when absent)
+APScheduler>=3.10,<4
+
+# Enabled external Git MCP process from opencode.json
+mcp-server-git

@@ -14,7 +14,7 @@ async function callBrowser(action: string, body: Record<string, unknown> = {}): 
 }
 
 export const navigate = tool({
-  description: "Navigate the browser to a URL. Auto-starts the browser daemon if not running.",
+  description: "Navigate the already-running local Browser daemon to an HTTP(S) URL. Run /browser first.",
   args: {
     url: tool.schema.string().describe("URL to navigate to"),
   },

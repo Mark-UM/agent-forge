@@ -9,10 +9,19 @@
   },
   "instructions": [
     "AGENTS.md",
+    "AGENTS_COMPOSED.md",
     "markconfig/profile.md"
   ],
   "watcher": {
-    "ignore": ["node_modules/**", "plugins/**", "skills/**", "workspace/**", "_state/**", "_runtime/**", "__pycache__/**", ".opencode/skills/**/node_modules/**", ".opencode/skills/**/.git/**"]
+    "ignore": [
+      "node_modules/**",
+      "_state/**",
+      "_runtime/**",
+      "vendor/**",
+      "__pycache__/**",
+      ".opencode/skills/**/node_modules/**",
+      ".opencode/skills/**/.git/**"
+    ]
   },
   "plugin": [
     "oh-my-opencode@latest",
@@ -22,7 +31,7 @@
   "mcp": {
     "filesystem": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "E:/system_folder/.claude/.claude", "E:/system_folder", "E:/"],
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."],
       "enabled": true,
       "timeout": 30000
     },
@@ -34,7 +43,7 @@
     },
     "context7": {
       "type": "remote",
-      "url": "https://mcp.context7.com/sse",
+      "url": "https://mcp.context7.com/mcp",
       "enabled": true
     },
     "sequential-thinking": {
@@ -47,7 +56,7 @@
       "type": "local",
       "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
       "environment": {
-        "MEMORY_FILE_PATH": "E:/system_folder/.claude/.claude/_runtime/mcp-memory.json"
+        "MEMORY_FILE_PATH": "_runtime/mcp-memory.json"
       },
       "enabled": true,
       "timeout": 30000
@@ -60,32 +69,32 @@
     },
     "fetch": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-fetch"],
+      "command": ["python", "-m", "modules.mcp.fetch_mcp", "serve"],
       "enabled": true,
       "timeout": 30000
     },
     "sqlite": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-sqlite", "E:/system_folder/.claude/.claude/_runtime/mcp-sqlite.db"],
+      "command": ["python", "-m", "modules.mcp.sqlite_mcp", "serve", "--db-path", "_runtime/mcp-sqlite.db"],
       "enabled": true,
       "timeout": 30000
     },
     "time": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-time"],
+      "command": ["python", "-m", "modules.mcp.time_mcp", "serve"],
       "enabled": true,
       "timeout": 30000
     },
     "git": {
       "type": "local",
-      "command": ["C:/Users/mingy/AppData/Local/Programs/Python/Python311/python.exe", "-m", "mcp_server_git", "--repository", "E:/system_folder/.claude/.claude"],
+      "command": ["python", "-m", "mcp_server_git", "--repository", "."],
       "enabled": true,
       "timeout": 10000
     },
     "duckduckgo": {
       "type": "local",
-      "command": ["C:/Users/mingy/AppData/Local/Programs/Python/Python311/python.exe", "-m", "duckduckgo_mcp_server"],
-      "enabled": true,
+      "command": ["python", "-m", "duckduckgo_mcp_server"],
+      "enabled": false,
       "timeout": 30000
     },
     "searxng": {
@@ -100,8 +109,29 @@
     "g-search": {
       "type": "local",
       "command": ["npx", "-y", "g-search-mcp"],
-      "enabled": true,
+      "enabled": false,
       "timeout": 60000
+    },
+    "serper": {
+      "type": "local",
+      "command": ["python", "-m", "modules.search.serper_mcp", "serve"],
+      "environment": {
+        "SERPER_API_KEY": "{env:SERPER_API_KEY}"
+      },
+      "enabled": true,
+      "timeout": 30000
+    },
+    "arxiv": {
+      "type": "local",
+      "command": ["python", "-m", "modules.search.arxiv_mcp", "serve"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "semantic_scholar": {
+      "type": "local",
+      "command": ["python", "-m", "modules.search.semantic_scholar_mcp", "serve"],
+      "enabled": true,
+      "timeout": 30000
     }
   }
 }

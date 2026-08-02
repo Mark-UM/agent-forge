@@ -1,7 +1,12 @@
 {
-  "name": "vision",
-  "description": "图片识别，调用硅基流动 Qwen3-VL-Plus 模型",
-  "version": "1.0",
-  "entry": "recognize.py",
-  "tools": ["recognize.py", "clipboard.py"]
+  "module": "vision",
+  "version": "1.0.0",
+  "entry_point": "python -m modules.vision.recognize",
+  "description": "SiliconFlow Qwen3-VL image/PDF recognition plus clipboard adapter",
+  "components": ["recognize.py", "clipboard.py"],
+  "dependencies": {
+    "required": ["Python standard library", "SILICONFLOW_API_KEY"],
+    "optional_by_operation": ["PyMuPDF for PDF rendering", "Pillow for clipboard images"]
+  },
+  "runtime_outputs": ["_runtime/vision/usage.jsonl", "temporary rendered PDF pages"]
 }

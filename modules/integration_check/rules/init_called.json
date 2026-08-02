@@ -1,0 +1,18 @@
+{
+  "name": "init_called",
+  "severity": "error",
+  "description": "init() method defined but never called in bootstrap code (main.ts / index.ts)",
+  "source": "Section 3.2 Direction 3 — 集成链路强制检查 #1: init/load 链路",
+  "detection": {
+    "method": "regex",
+    "patterns": {
+      "init_definition": "init\\s*\\(\\s*\\)\\s*[:{]",
+      "init_call": "\\.init\\s*\\("
+    },
+    "bootstrap_files": ["src/main.ts", "src/index.ts", "src/bootstrap.ts"],
+    "manager_classes": ["SoundManager", "AudioManager", "InputHandler", "RenderManager", "UIManager"]
+  },
+  "rationale": "Tower Stack 3D fatal bug: SoundManager.init() defined but never called from main.ts, causing audio to silently never start. The 'form compliance trap' produces the class with init() but skips wiring it into bootstrap.",
+  "whitelistable": true,
+  "whitelist_key": "init_called"
+}
