@@ -278,6 +278,7 @@ class TestCLI:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=30,
         )
         assert result.returncode == 0
@@ -292,6 +293,7 @@ class TestCLI:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=30,
         )
         assert result.returncode == 1
@@ -306,6 +308,7 @@ class TestCLI:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=30,
         )
         assert gen_result.returncode == 0
@@ -316,6 +319,7 @@ class TestCLI:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=30,
         )
         assert val_result.returncode == 0
@@ -329,6 +333,7 @@ class TestCLI:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=30,
         )
         assert result.returncode == 0

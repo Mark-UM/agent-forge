@@ -47,7 +47,7 @@ export const type = tool({
 export const screenshot = tool({
   description: "Take a full-page screenshot of the current browser page",
   args: {
-    filepath: tool.schema.string().optional().describe("Optional path to save screenshot. Defaults to modules/browser/screenshot.png"),
+    filepath: tool.schema.string().optional().describe("Optional allowed image path. Defaults to _runtime/browser/screenshots/latest.png"),
   },
   async execute(args) {
     return callBrowser("screenshot", { path: args.filepath })

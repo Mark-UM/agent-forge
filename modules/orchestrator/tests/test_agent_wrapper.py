@@ -172,6 +172,58 @@ def test_atomic_write_creates_parent_dir(tmp_path):
     assert os.path.exists(filepath)
 
 
+def test_atomic_write_supports_current_directory(tmp_path, monkeypatch):
+    from modules.orchestrator.agent_wrapper import _atomic_write
+
+    monkeypatch.chdir(tmp_path)
+    _atomic_write("report.md", "content")
+
+    assert (tmp_path / "report.md").read_text(encoding="utf-8") == "content"
+
+
+def test_run_with_browser_use_writes_agent_result(temp_output_path):
+    from modules.orchestrator import agent_wrapper
+
+    history = MagicMock()
+    history.final_result.return_value = "Extracted by autonomous browser"
+    agent = MagicMock()
+    with patch.object(agent_wrapper, "_create_browser_use_agent", return_value=agent), \
+         patch.object(agent_wrapper, "_run_browser_use_agent", return_value=history):
+        result = agent_wrapper._run_with_browser_use(
+            "https://example.com", "collect facts", temp_output_path
+        )
+
+    assert result["success"] is True
+    assert result["backend"] == "browser_use"
+    assert "Extracted by autonomous browser" in Path(temp_output_path).read_text(encoding="utf-8")
+
+
+def test_create_browser_use_agent_requires_key(monkeypatch):
+    from modules.orchestrator import agent_wrapper
+
+    monkeypatch.delenv("BROWSER_USE_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="API_KEY"):
+        agent_wrapper._create_browser_use_agent("https://example.com", "collect")
+
+
+def test_run_with_fetch_success(temp_output_path):
+    from modules.orchestrator import agent_wrapper
+
+    fetched = {"content": "Static page content", "url": "https://example.com"}
+    with patch("modules.mcp.fetch_mcp.fetch_url", return_value=fetched):
+        result = agent_wrapper._run_with_fetch(
+            "https://example.com", "collect", temp_output_path
+        )
+
+    assert result["success"] is True
+    assert result["backend"] == "fetch"
+    assert "Static page content" in Path(temp_output_path).read_text(encoding="utf-8")
+
+
 # ── _run_with_browser_daemon tests ─────────────────────────────
 
 
@@ -296,6 +348,56 @@ def test_run_collection_pipeline_browser_use_failure_fallback(temp_output_path):
         assert result.get("primary_error") == "LLM not configured"
 
 
+def test_run_collection_pipeline_uses_fetch_after_daemon_failure(temp_output_path):
+    from modules.orchestrator import agent_wrapper
+
+    with patch.object(agent_wrapper, "_check_browser_use", return_value=False), \
+         patch.object(
+             agent_wrapper,
+             "_run_with_browser_daemon",
+             return_value={"success": False, "error": "daemon unavailable"},
+         ), \
+         patch.object(
+             agent_wrapper,
+             "_run_with_fetch",
+             return_value={"success": True, "backend": "fetch"},
+         ):
+        result = agent_wrapper.run_collection_pipeline(
+            "https://example.com", temp_output_path
+        )
+
+    assert result["success"] is True
+    assert result["backend"] == "fetch"
+    assert result["fallback_errors"] == ["daemon unavailable"]
+
+
+def test_run_collection_pipeline_reports_every_backend_failure(temp_output_path):
+    from modules.orchestrator import agent_wrapper
+
+    with patch.object(agent_wrapper, "_check_browser_use", return_value=True), \
+         patch.object(
+             agent_wrapper,
+             "_run_with_browser_use",
+             return_value={"success": False, "error": "agent failed"},
+         ), \
+         patch.object(
+             agent_wrapper,
+             "_run_with_browser_daemon",
+             return_value={"success": False, "error": "daemon failed"},
+         ), \
+         patch.object(
+             agent_wrapper,
+             "_run_with_fetch",
+             return_value={"success": False, "error": "fetch failed"},
+         ):
+        result = agent_wrapper.run_collection_pipeline(
+            "https://example.com", temp_output_path
+        )
+
+    assert result["success"] is False
+    assert result["errors"] == ["agent failed", "daemon failed", "fetch failed"]
+
+
 def test_run_collection_pipeline_default_output_path():
     """Pipeline should generate default output path when not provided."""
     from modules.orchestrator import agent_wrapper
@@ -306,6 +408,32 @@ def test_run_collection_pipeline_default_output_path():
         result = agent_wrapper.run_collection_pipeline("https://example.com")
         # _run_with_browser_daemon should have been called with a generated path
         assert result["success"] is True
+
+
+@pytest.mark.parametrize("target", ["", "example.com", "file:///etc/passwd"])
+def test_run_collection_pipeline_rejects_non_http_targets(target, temp_output_path):
+    from modules.orchestrator import agent_wrapper
+
+    with patch.object(agent_wrapper, "_run_with_browser_daemon") as daemon:
+        result = agent_wrapper.run_collection_pipeline(target, temp_output_path)
+
+    assert result["success"] is False
+    assert "HTTP(S)" in result["error"] or "empty" in result["error"]
+    daemon.assert_not_called()
+
+
+def test_run_collection_pipeline_rejects_output_over_source_file(tmp_path):
+    from modules.orchestrator import agent_wrapper
+
+    source_path = agent_wrapper._PROJECT_ROOT / "README.md"
+    with patch.object(agent_wrapper, "_run_with_browser_daemon") as daemon:
+        result = agent_wrapper.run_collection_pipeline(
+            "https://example.com", str(source_path)
+        )
+
+    assert result["success"] is False
+    assert "_runtime" in result["error"]
+    daemon.assert_not_called()
 
 
 # ── get_backend_status tests ───────────────────────────────────

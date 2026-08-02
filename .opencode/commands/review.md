@@ -33,6 +33,12 @@ Call each subagent sequentially. After all three complete, produce a summary rep
 
 If any stage FAILs, list the specific issues that need fixing.
 
+For each confirmed blocking defect, explicitly call
+`modules.memory.hook.append_lesson` with a short technical lesson and source
+path after removing credentials and personal data. Do not write review prose or
+speculation into memory, and do not record anything when the review itself could
+not run.
+
 ## Post-Review Hook (v1.5 P2)
 
 After the 3-stage review pipeline completes, **automatically log an experiment**

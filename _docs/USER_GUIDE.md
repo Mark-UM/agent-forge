@@ -2,71 +2,90 @@
 
 ## Start
 
-Create ignored local configuration, install dependencies, and launch:
-
 ```powershell
+python --version
+python -m modules.bootstrap.dependencies install
+python -m modules.bootstrap.dependencies check --json
+python -m modules.bootstrap.dependencies install-browser chromium
+python -m pip install -r requirements-dev.txt
+npm ci --prefix .opencode
 Copy-Item markconfig/secrets.example.json markconfig/secrets.json
 Copy-Item markconfig/profile.example.md markconfig/profile.md
-python -m pip install -r requirements.txt
-npm ci --prefix .opencode
-python -m playwright install firefox
 .\start-opencode.bat
 ```
 
-`python`, `npx`, and `opencode` must be on `PATH`. The launcher composes the
-generated Prompt but does not start Browser/Scheduler daemons.
+Python 3.11 is required. Set `AGENT_FORGE_PYTHON` to an explicit executable if
+`python` on `PATH` is different. The launcher validates the local dependency ABI
+before composing the prompt and starting OpenCode. It does not start daemons.
 
-## Slash Commands
+## Commands
 
 | Command | Purpose | Boundary |
 |---|---|---|
-| `/doctor` | report configuration/dependency/memory health | reports; does not repair |
-| `/review` | sequentially coordinate 3 read-only reviewers | procedural |
-| `/deliver` | combine TS/Vite static checks and review | not one Python transaction |
-| `/browser` | start the localhost Firefox daemon | required before Browser tools |
-| `/search` | provider-aware Search procedure | not directly wired to `SearchOrchestrator` |
-| `/collect` | screenshot/Vision-based URL report | current browser-use branch unfinished |
-| `/index` | ChromaDB file indexing/search | requires ChromaDB |
-| `/schedule` | SQLite schedule CRUD/action extraction | Scheduler daemon is separate |
-| `/mode` | compose a task/profile Prompt | writes ignored generated state |
-| `/prompt` | inspect Prompt version/experiments | reads ignored logs |
-| `/handoff` | manage context packets | packets may be sensitive |
+| `/doctor` | configuration/dependency/Memory diagnostics | does not repair |
+| `/review` | sequential code/structure/risk review | procedural |
+| `/deliver` | TS/Vite static checks plus review | not one Python transaction |
+| `/browser` | start loopback Playwright daemon | required only for daemon-backed tools |
+| `/collect` | browser-use, Browser/Vision, then static-fetch URL report | reports actual backend |
+| `/search` | provider-aware Search procedure | MCP callbacks are model-coordinated |
+| `/index` | ChromaDB file index/search | local model/index state required |
+| `/schedule` | SQLite schedule CRUD/action extraction | timed Scheduler daemon is separate |
+| `/mode` | compose task/profile prompt | writes ignored generated state |
+| `/prompt` | inspect prompt version/experiments | reads ignored logs |
+| `/handoff` | manage context packets | packets may contain sensitive context |
 
 ## Browser and collection
 
-Run `/browser`, verify `http://127.0.0.1:9223/ping`, then use Browser tools.
-The daemon is visible (`headless=False`), binds localhost, and remains running
-until closed. Edit its Firefox executable/profile constants for your machine.
+Run `/browser` and verify `http://127.0.0.1:9223/ping` for Browser tools. The
+daemon binds loopback, stores cookies/local storage under `_runtime/browser`,
+and uses a visible window unless `AGENT_FORGE_BROWSER_HEADLESS=true`.
 
-`/collect` currently uses the daemon fallback. It navigates, waits, screenshots,
-calls Vision, and summarizes recognized screenshot text. It is not full DOM
-extraction.
+Browser selection is:
 
-## Vision
+1. `AGENT_FORGE_BROWSER_ENGINE` (`chromium` by default; optional `firefox` or
+   `webkit`);
+2. the matching Playwright-managed browser under ignored `_runtime/`;
+3. `AGENT_FORGE_BROWSER_EXECUTABLE` only when explicitly supplied as an
+   override.
 
-Image/PDF requests use the custom Vision tool. PDF rendering requires PyMuPDF;
-clipboard images require Pillow; API calls require `SILICONFLOW_API_KEY`.
+`/collect` tries browser-use first when an LLM key is available. If that fails,
+it tries the running daemon plus Vision, then static fetch. A successful fallback
+includes prior backend errors. The Vision path sees a screenshot, while static
+fetch cannot execute client-side JavaScript.
 
-## Search
+## Memory
 
-The currently enabled general providers are SearXNG and Serper; Serper needs an
-API key. Context7/GitHub are preferred for their domains, and arXiv/Semantic
-Scholar handle academic requests. DuckDuckGo and g-search are disabled
-definitions. Always report providers that actually succeeded.
+Private Memory files remain ignored local Markdown. There is no automatic
+conversation capture.
 
-## Local state and privacy
+```powershell
+python -m modules.memory.hook health
+python -m modules.memory.hook review
+```
 
-Secrets, profile, memory, and `_runtime/` remain plain local files. They are
-ignored by Git, not encrypted. The memory hook writes only when explicitly
-called; it is not an automatic event listener.
+`health` returns structure/count metadata only. `review` scans explicit unchecked
+tasks/TODO lines and writes an ignored report without modifying source Memory.
 
-## Troubleshooting
+## Scheduler
 
-- Browser import/start error: install requirements and Playwright Firefox, then
-  check the Firefox constants.
-- Vision PDF/clipboard error: verify PyMuPDF/Pillow and the SiliconFlow key.
-- Index unavailable: verify ChromaDB installation.
-- Scheduler reports `stub`: APScheduler is absent.
+Start timed jobs with `python -m modules.scheduler.daemon`. The service binds
+`127.0.0.1:9225` and persists `_runtime/scheduler/jobs.json`. Supported jobs are
+file reindex, report collection, Memory review, action extraction, and exact
+whitelist custom calls. If APScheduler is unavailable, creation is refused; no
+false-active job is saved.
+
+## Privacy and troubleshooting
+
+Secrets, profile, Memory, recovery evidence, vendor packages, and `_runtime/`
+are ignored plain local files—not encrypted data.
+
+- Dependency check fails: run the installer with Python 3.11 and inspect
+  `import_error`; do not trust dist-info presence alone.
+- Browser start fails: run `install-browser chromium`, verify the dependency
+  report, then inspect explicit engine/executable overrides.
+- Vision fails: verify PyMuPDF/Pillow imports and `SILICONFLOW_API_KEY`.
+- browser-use falls back: verify a supported LLM key and inspect returned errors.
+- Index fails: verify ChromaDB import and writable `_runtime/search/chroma`.
 - Serper fails: verify `SERPER_API_KEY` and network access.
-- External skills missing: expected on a clean clone; no tracked installer
-  currently recreates the four upstream repositories/junctions.
+- External skills are absent on a clean clone by design; no tracked installer
+  currently recreates them.

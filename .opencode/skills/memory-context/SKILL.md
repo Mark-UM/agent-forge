@@ -26,3 +26,9 @@ local memory files. They may not exist in a clean clone.
 - For career/tech guidance: Read `user-career.md` and `user-tech-stack.md`.
 - Never log or display contents of `secrets.json`.
 - Never assume any private memory file exists or is safe to commit.
+- `python -m modules.memory.hook health` reports structure/counts without
+  returning private content.
+- `python -m modules.memory.hook review` creates an ignored, read-only report of
+  explicit unchecked tasks/TODO lines. It does not modify source memory.
+- Lesson/decision appends occur only through explicit calls. There is no
+  automatic conversation capture or hidden event registration.

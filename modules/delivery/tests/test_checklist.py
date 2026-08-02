@@ -716,7 +716,7 @@ class TestCLI:
         result = subprocess.run(
             [sys.executable, '-m', 'modules.delivery.checklist',
              '--target', str(tower_stack_project)],
-            capture_output=True, text=True, cwd=str(PROJECT_ROOT)
+            capture_output=True, text=True, encoding='utf-8', cwd=str(PROJECT_ROOT)
         )
         assert result.returncode == 1  # FAIL
         assert 'FAIL' in result.stdout
@@ -726,7 +726,7 @@ class TestCLI:
         result = subprocess.run(
             [sys.executable, '-m', 'modules.delivery.checklist',
              '--target', str(tower_stack_project), '--json'],
-            capture_output=True, text=True, cwd=str(PROJECT_ROOT)
+            capture_output=True, text=True, encoding='utf-8', cwd=str(PROJECT_ROOT)
         )
         parsed = json.loads(result.stdout)
         assert 'findings' in parsed

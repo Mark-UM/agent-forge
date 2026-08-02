@@ -22,6 +22,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from modules.bootstrap.dependencies import activate_vendor_path
+
+activate_vendor_path()
+
 # ── Paths ──────────────────────────────────────────────────────
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _CHROMA_DIR = _PROJECT_ROOT / "_runtime" / "search" / "chroma"

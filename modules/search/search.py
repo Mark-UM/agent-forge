@@ -801,8 +801,8 @@ def health_check(args):
 
     # local MCP 仅检查命令是否在 PATH 中
     local_mcps = {
-        'duckduckgo': ('C:/Users/mingy/AppData/Local/Programs/Python/Python311/python.exe', ['-m', 'duckduckgo_mcp_server', '--help']),
-        'git': ('C:/Users/mingy/AppData/Local/Programs/Python/Python311/python.exe', ['-m', 'mcp_server_git', '--help']),
+        'duckduckgo': (sys.executable, ['-m', 'duckduckgo_mcp_server', '--help']),
+        'git': (sys.executable, ['-m', 'mcp_server_git', '--help']),
     }
 
     for name, (cmd, flags) in local_mcps.items():

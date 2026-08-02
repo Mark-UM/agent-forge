@@ -9,9 +9,10 @@ import sys
 import tempfile
 import os
 import sqlite3
+from pathlib import Path
 
 PYTHON = sys.executable
-PROJECT_ROOT = r'E:\system_folder\.claude\.claude'
+PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 
 
 def send(proc, obj):

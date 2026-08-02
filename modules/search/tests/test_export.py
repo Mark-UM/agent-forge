@@ -36,7 +36,7 @@ from export import (
 
 # ── 测试数据 ────────────────────────────────────────────────────
 SAMPLE_ENTRY_FULL = {
-    'timestamp': '2026-07-20T10:00:00',
+    'timestamp': (datetime.now() - timedelta(days=1)).isoformat(timespec='seconds'),
     'query': 'React useEffect cleanup best practices',
     'score': 8.5,
     'satisfied': True,
@@ -54,7 +54,7 @@ SAMPLE_ENTRY_FULL = {
 }
 
 SAMPLE_ENTRY_SAVED = {
-    'timestamp': '2026-07-19T15:30:00',
+    'timestamp': (datetime.now() - timedelta(days=2)).isoformat(timespec='seconds'),
     'query': 'DeepSeek V4 Pro context window',
     'score': 9.0,
     'satisfied': True,
@@ -65,7 +65,7 @@ SAMPLE_ENTRY_SAVED = {
 }
 
 SAMPLE_ENTRY_OLD = {
-    'timestamp': '2026-06-01T08:00:00',  # 远早于 7 天
+    'timestamp': (datetime.now() - timedelta(days=60)).isoformat(timespec='seconds'),
     'query': 'Old query',
     'score': 5.0,
     'satisfied': False,

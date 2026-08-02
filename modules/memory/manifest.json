@@ -1,13 +1,16 @@
 {
   "module": "memory",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entry_point": "modules.memory.hook",
-  "description": "Atomic append helpers for ignored lessons/decision files and local memory health reporting",
+  "description": "Explicit atomic lesson/decision writes, structural health checks, and read-only open-action review for private local memory",
   "dependencies": ["Python standard library"],
   "writes": [
     "_data/memory/lessons.md",
     "_data/memory/decisions.md",
-    "_runtime/memory/adr_counter.txt"
+    "_runtime/memory/adr_counter.txt",
+    "_runtime/memory/locks/*.lock",
+    "_runtime/reports/memory-review-*.md"
   ],
-  "activation": "library calls only; no automatic hook registration is implemented"
+  "activation": "Explicit library calls or `python -m modules.memory.hook health|review`; no automatic conversation capture or hook registration",
+  "recovery": "ADR allocation reconciles a missing ignored counter against existing decisions before issuing the next ID"
 }

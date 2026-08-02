@@ -1,19 +1,20 @@
 {
   "module": "orchestrator",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Local collection, file indexing, action extraction, and schedule storage helpers",
   "components": {
-    "agent_wrapper.py": "Collection pipeline; current browser-use branch is a placeholder and falls back to the Browser daemon",
+    "agent_wrapper.py": "HTTP(S)-validated collection pipeline: browser-use Agent, local Browser daemon/Vision, then static fetch fallback",
     "file_indexer.py": "Optional ChromaDB-backed Markdown/text indexing",
     "action_extractor.py": "Model-assisted action extraction with schedule persistence",
     "schedule_store.py": "SQLite schedule CRUD under _runtime/mcp-sqlite.db"
   },
   "dependencies": {
-    "required": ["Python standard library"],
-    "optional": ["chromadb", "local Browser daemon", "Vision dependencies", "DeepSeek API key"]
+    "required": ["Python standard library", "dependencies pinned by requirements.txt"],
+    "optional": ["local Browser daemon", "SiliconFlow key", "BrowserUse/DeepSeek/Anthropic key"]
   },
   "limitations": [
-    "browser-use Agent LLM integration is not implemented",
-    "collection fallback requires the Browser daemon to be started separately"
+    "browser-use autonomous collection requires a supported LLM key",
+    "daemon collection requires the Browser daemon to be started separately; static fetch remains the final fallback",
+    "generated Markdown reports are confined to ignored _runtime or OS temporary storage"
   ]
 }

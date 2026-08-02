@@ -4,11 +4,40 @@ setlocal
 pushd "%~dp0"
 set "PROJECT_ROOT=%CD%"
 set "SECRETS_FILE=%PROJECT_ROOT%\markconfig\secrets.json"
-set "PYTHON=python"
+if defined AGENT_FORGE_PYTHON (
+    set "PYTHON=%AGENT_FORGE_PYTHON%"
+    for %%I in ("%AGENT_FORGE_PYTHON%") do set "PATH=%%~dpI;%PATH%"
+) else (
+    set "PYTHON=python"
+)
+set "VENDOR_LIBS=%PROJECT_ROOT%\vendor\python-libs"
 
-where %PYTHON% >nul 2>nul
+if exist "%VENDOR_LIBS%" (
+    if defined PYTHONPATH (
+        set "PYTHONPATH=%VENDOR_LIBS%;%PYTHONPATH%"
+    ) else (
+        set "PYTHONPATH=%VENDOR_LIBS%"
+    )
+)
+
+"%PYTHON%" --version >nul 2>nul
 if errorlevel 1 (
     echo [agent-forge] Python was not found on PATH.
+    popd
+    exit /b 1
+)
+
+"%PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)"
+if errorlevel 1 (
+    echo [agent-forge] Python 3.11 is required. Set AGENT_FORGE_PYTHON to its executable path.
+    popd
+    exit /b 1
+)
+
+"%PYTHON%" -m modules.bootstrap.dependencies check >nul
+if errorlevel 1 (
+    echo [agent-forge] Local dependencies are missing or incompatible.
+    echo [agent-forge] Run: "%PYTHON%" -m modules.bootstrap.dependencies install
     popd
     exit /b 1
 )
@@ -19,15 +48,18 @@ if not exist "%SECRETS_FILE%" (
     exit /b 1
 )
 
-for /f "delims=" %%i in ('%PYTHON% -c "import json; d=json.load(open(r'%SECRETS_FILE%', encoding='utf-8')); print(d.get('ANTHROPIC_AUTH_TOKEN',''))"') do set "DEEPSEEK_API_KEY=%%i"
-for /f "delims=" %%i in ('%PYTHON% -c "import json; d=json.load(open(r'%SECRETS_FILE%', encoding='utf-8')); print(d.get('SILICONFLOW_API_KEY',''))"') do set "SILICONFLOW_API_KEY=%%i"
-for /f "delims=" %%i in ('%PYTHON% -c "import json; d=json.load(open(r'%SECRETS_FILE%', encoding='utf-8')); print(d.get('GITHUB_PERSONAL_ACCESS_TOKEN',''))"') do set "GITHUB_PERSONAL_ACCESS_TOKEN=%%i"
-for /f "delims=" %%i in ('%PYTHON% -c "import json; d=json.load(open(r'%SECRETS_FILE%', encoding='utf-8')); print(d.get('SERPER_API_KEY',''))"') do set "SERPER_API_KEY=%%i"
+"%PYTHON%" -m modules.bootstrap.secrets_env >nul
+if errorlevel 1 (
+    echo [agent-forge] Failed to load markconfig\secrets.json.
+    popd
+    exit /b 1
+)
+for /f "usebackq tokens=1,* delims==" %%A in (`"%PYTHON%" -m modules.bootstrap.secrets_env`) do set "%%A=%%B"
 
 set "DEEPSEEK_BASE_URL=https://api.deepseek.com"
 
 echo [agent-forge] Composing AGENTS_COMPOSED.md...
-%PYTHON% -m modules.prompt.composer --pre-session
+"%PYTHON%" -m modules.prompt.composer --pre-session
 if errorlevel 1 (
     echo [agent-forge] Prompt composition failed; using AGENTS.md as fallback.
     copy /Y "%PROJECT_ROOT%\AGENTS.md" "%PROJECT_ROOT%\AGENTS_COMPOSED.md" >nul

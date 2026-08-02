@@ -65,6 +65,7 @@ def test_health_check_job_types():
     assert "memory_review" in types
     assert "action_extract" in types
     assert "custom" in types
+    assert "pattern_extract" not in types
 
 
 # ── Jobs persistence tests ─────────────────────────────────────
@@ -146,12 +147,29 @@ def test_execute_job_unknown_type():
 
 
 def test_execute_job_memory_review():
-    """memory_review job should return success (stub)."""
+    """memory_review delegates to the real read-only memory reviewer."""
+    from unittest.mock import patch
     from modules.scheduler.daemon import _execute_job
 
-    result = _execute_job("memory_review", {})
+    expected = {"success": True, "action_count": 2, "report_path": "report.md"}
+    with patch("modules.memory.hook.review_memory", return_value=expected):
+        result = _execute_job("memory_review", {})
     assert result["success"] is True
-    assert "detail" in result
+    assert result["detail"] == expected
+
+
+def test_execute_job_report_collect_propagates_failure():
+    from unittest.mock import patch
+    from modules.scheduler.daemon import _execute_job
+
+    with patch(
+        "modules.orchestrator.agent_wrapper.run_collection_pipeline",
+        return_value={"success": False, "error": "all backends unavailable"},
+    ):
+        result = _execute_job("report_collect", {"target": "https://example.com"})
+
+    assert result["success"] is False
+    assert result["detail"]["error"] == "all backends unavailable"
 
 
 def test_execute_job_action_extract_missing_path():
@@ -176,6 +194,27 @@ def test_execute_job_custom_whitelist_violation():
     assert "not in whitelist" in result.get("error", "")
 
 
+def test_execute_job_custom_propagates_structured_failure():
+    from unittest.mock import patch
+    from modules.scheduler.daemon import _execute_job
+
+    with patch(
+        "modules.memory.hook.check_memory_health",
+        return_value={"success": False, "error": "unhealthy"},
+    ):
+        result = _execute_job(
+            "custom",
+            {
+                "module": "modules.memory.hook",
+                "function": "check_memory_health",
+                "params": {},
+            },
+        )
+
+    assert result["success"] is False
+    assert result["detail"]["error"] == "unhealthy"
+
+
 # ── Cron validation tests ──────────────────────────────────────
 
 
@@ -197,7 +236,7 @@ def test_cron_validation_5_fields(temp_jobs_file):
 
     # Invalid 4-field cron
     mock_scheduler.reset_mock()
-    with pytest.raises(ValueError, match="5 字段"):
+    with pytest.raises(ValueError, match="5 fields"):
         _add_job_to_scheduler(mock_scheduler, "job_2", "file_reindex", "0 9 *", {})
 
 

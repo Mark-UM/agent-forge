@@ -1,20 +1,19 @@
 {
   "module": "scheduler",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "entry_point": "python -m modules.scheduler.daemon",
   "bind": "127.0.0.1:9225",
   "persistence": "_runtime/scheduler/jobs.json",
   "dependencies": {
-    "required": ["Python standard library"],
-    "optional": ["APScheduler>=3.10,<4"]
+    "required": ["Python standard library", "APScheduler==3.11.3"]
   },
   "job_types": {
     "file_reindex": "implemented",
     "report_collect": "implemented, subject to collection pipeline limitations",
     "action_extract": "implemented",
-    "custom": "implemented for an explicit module whitelist",
-    "memory_review": "placeholder that returns a not-implemented detail",
-    "pattern_extract": "reserved name with no execution branch"
+    "custom": "implemented for an exact module-and-function whitelist",
+    "memory_review": "implemented as a read-only explicit task scan and local report"
   },
-  "fallback": "Without APScheduler the HTTP service reports stub mode"
+  "fallback": "Without APScheduler the service reports degraded mode and refuses schedule creation rather than persisting false-active jobs",
+  "recovery": "Malformed jobs.json is moved to a timestamped .corrupt file; active jobs that cannot be restored are persisted with error status instead of remaining false-active"
 }

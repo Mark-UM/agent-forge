@@ -1,5 +1,5 @@
 ---
-description: Collect a URL through the local Browser daemon, Vision, and Search aggregation
+description: Collect and summarize an HTTP(S) source with bounded fallbacks
 agent: build
 ---
 
@@ -7,14 +7,18 @@ agent: build
 
 Usage: `/collect <http-or-https-url> [output_path]`
 
-Call `modules.orchestrator.agent_wrapper.run_collection_pipeline`. The effective
-implementation currently uses the Browser daemon fallback: the browser-use
-adapter is only a probe/placeholder and deliberately returns an integration
-error before falling back. Start `/browser` first.
+Call `modules.orchestrator.agent_wrapper.run_collection_pipeline` and report the
+backend that actually succeeded. The ordered backends are:
 
-The fallback flow navigates, waits three seconds, captures a screenshot, calls
-the Vision CLI, summarizes the recognized text, and atomically writes Markdown.
-The default output is under `_runtime/reports/`.
+1. `browser-use` Agent when the package and a supported LLM key are available;
+2. the separately started local Browser daemon plus Vision recognition;
+3. static HTTP fetch for pages that do not require browser execution.
 
-Do not claim full DOM extraction: the current implementation recognizes a
-screenshot and truncates aggregation input/output in several fallback paths.
+Inputs must be absolute credential-free HTTP(S) URLs. Reports are written
+atomically; the default path is under `_runtime/reports/`. Preserve the returned
+fallback errors so a degraded success is not presented as a primary-backend
+success.
+
+The Browser daemon path recognizes a screenshot rather than extracting the
+complete DOM. Static fetch cannot render client-side applications. Do not claim
+either limitation is equivalent to autonomous browser collection.

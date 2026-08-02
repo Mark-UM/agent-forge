@@ -14,7 +14,7 @@ version: 1.5.0
 - 4-space indentation, no tabs
 
 ## Project Conventions
-- Python 3.11+ (path: `C:/Users/mingy/AppData/Local/Programs/Python/Python311/python.exe`)
+- Python 3.11 for the project runtime ABI; use `sys.executable` for child Python processes
 - Prefer standard library; introduce external deps only when justified
 - HTTP: use `urllib.request` (zero-dep), NOT `requests` (unless already a dep)
 - Testing: `pytest` with `unittest.mock`

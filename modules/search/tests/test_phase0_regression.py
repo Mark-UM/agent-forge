@@ -64,7 +64,7 @@ class TestB1PiiBypassOrchestrator(unittest.TestCase):
         This test would have FAILED pre-fix because the AttributeError in
         orchestrator's try/except fell back to original_query.
         """
-        from orchestrator import SearchOrchestrator
+        from modules.search.orchestrator import SearchOrchestrator
         orch = SearchOrchestrator('contact me at mark@example.com please')
         orch.redact_pii()
         # PII MUST be redacted (not original)
@@ -76,7 +76,7 @@ class TestB1PiiBypassOrchestrator(unittest.TestCase):
 
     def test_real_privacy_module_redacts_phone(self):
         """End-to-end: Chinese phone number redaction."""
-        from orchestrator import SearchOrchestrator
+        from modules.search.orchestrator import SearchOrchestrator
         orch = SearchOrchestrator('call 13800138000 for info')
         orch.redact_pii()
         self.assertNotIn('13800138000', orch.query)
@@ -94,7 +94,7 @@ class TestB1PiiBypassOrchestrator(unittest.TestCase):
                        self.query = redacted_query
                        → PII redacted.
         """
-        from orchestrator import SearchOrchestrator
+        from modules.search.orchestrator import SearchOrchestrator
         orch = SearchOrchestrator('email: test@domain.com')
         orch.redact_pii()
         # The query should NOT equal original (PII was present)
@@ -163,9 +163,8 @@ class TestB3ScreenshotPathTraversal(unittest.TestCase):
              MODULE_DIR + "_evil/x.png" — path traversal.
     Post-fix: realpath + strict os.sep-aware prefix check.
 
-    Note: in production, SCREENSHOT_ALLOWED_DIRS contains both MODULE_DIR
-    and PROJECT_ROOT. To isolate the startswith bug, we patch
-    SCREENSHOT_ALLOWED_DIRS to a single controlled test directory.
+    Production resolves a callable list of allowed roots. To isolate the
+    boundary bug, tests patch that resolver to one controlled directory.
     """
 
     def setUp(self):
@@ -174,9 +173,12 @@ class TestB3ScreenshotPathTraversal(unittest.TestCase):
 
     def test_legitimate_subpath_passes(self):
         """A path directly inside an allowed dir should pass."""
-        import daemon
+        from modules.browser import daemon
         legit_path = os.path.join(self.tmp_allowed, 'screenshot.png')
-        with patch.object(daemon, 'SCREENSHOT_ALLOWED_DIRS', [self.tmp_allowed]):
+        with patch.object(
+            daemon, '_screenshot_allowed_dirs',
+            return_value=(Path(self.tmp_allowed).resolve(),),
+        ):
             result = daemon._validate_screenshot_path(legit_path)
         self.assertEqual(os.path.realpath(result), os.path.realpath(legit_path))
 
@@ -186,32 +188,40 @@ class TestB3ScreenshotPathTraversal(unittest.TestCase):
         This is the exact pre-fix bug: startswith(allowed_dir) returned True
         because '{allowed}_evil' starts with '{allowed}'.
         """
-        import daemon
+        from modules.browser import daemon
         evil_path = self.tmp_allowed + '_evil/x.png'
         # Ensure the evil path is NOT inside any production allowed dir
         # by patching to only our test dir
-        with patch.object(daemon, 'SCREENSHOT_ALLOWED_DIRS', [self.tmp_allowed]):
+        with patch.object(
+            daemon, '_screenshot_allowed_dirs',
+            return_value=(Path(self.tmp_allowed).resolve(),),
+        ):
             with self.assertRaises(ValueError) as ctx:
                 daemon._validate_screenshot_path(evil_path)
-        self.assertIn('不在允许的目录内', str(ctx.exception))
+        self.assertIn('outside allowed directories', str(ctx.exception))
 
     def test_dotdot_traversal_rejected(self):
         """../escape/x.png from inside allowed dir must be rejected."""
-        import daemon
+        from modules.browser import daemon
         # Build path that escapes the allowed dir via ..
         evil_path = os.path.join(self.tmp_allowed, '..', os.path.basename(self.tmp_outside), 'evil.png')
-        with patch.object(daemon, 'SCREENSHOT_ALLOWED_DIRS', [self.tmp_allowed]):
+        with patch.object(
+            daemon, '_screenshot_allowed_dirs',
+            return_value=(Path(self.tmp_allowed).resolve(),),
+        ):
             with self.assertRaises(ValueError):
                 daemon._validate_screenshot_path(evil_path)
 
     def test_empty_path_returns_default(self):
         """Empty path should fall back to default screenshot location."""
-        import daemon
-        # Use the production MODULE_DIR as default (no patch)
+        from modules.browser import daemon
+        # Generated screenshots default to ignored runtime storage.
         result = daemon._validate_screenshot_path('')
         self.assertEqual(
             os.path.realpath(result),
-            os.path.realpath(os.path.join(daemon.MODULE_DIR, 'screenshot.png')))
+            os.path.realpath(
+                os.path.join(daemon.RUNTIME_DIR, 'screenshots', 'latest.png')
+            ))
 
 
 # ── B4: Experiment ID collision ────────────────────────────────

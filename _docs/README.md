@@ -12,6 +12,8 @@
 
 ## Historical context
 
+- `history/2026-08-02-recovery-audit.md` — deletion scope, recovery authorities,
+  GitHub/snapshot distinction, and confidence by area.
 - `history/` — earlier migration/postmortem records.
 - `roadmap/archive/` — superseded, completed, or exploratory plans.
 
