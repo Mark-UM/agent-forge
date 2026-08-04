@@ -1,50 +1,59 @@
 {
-  "module": "prompt",
-  "version": "1.5.0",
-  "description": "Dynamic OpenCode prompt composition and task/context selection",
-  "entry_points": {
-    "compose": "python -m modules.prompt.composer",
-    "pre_session": "python -m modules.prompt.composer --pre-session",
-    "list_tasks": "python -m modules.prompt.composer --list-tasks",
-    "experiment_stats": "python -m modules.prompt.experiments --stats"
+  "name": "prompt",
+  "version": "1.6.0",
+  "description": "Composable prompt runtime with constitutional priority layers, project context detection, versioned context state, and pre-session AGENTS_COMPOSED generation",
+  "entrypoints": {
+    "cli": "python -m modules.prompt.composer --help",
+    "python": "python -m modules.prompt.context --help"
   },
-  "components": [
-    "classify.py",
-    "composer.py",
-    "context.py",
-    "experiments.py",
-    "log.py"
-  ],
-  "layers": [
-    "base",
-    "profile",
-    "task",
-    "context",
-    "example",
-    "local profile when present"
-  ],
-  "task_types": [
-    "coding",
-    "review",
-    "research",
-    "debugging",
-    "planning",
-    "writing",
-    "automation",
-    "delivery"
-  ],
-  "runtime_outputs": [
-    "AGENTS_COMPOSED.md",
-    "_runtime/prompt/composition_log.jsonl",
-    "_runtime/prompt/experiments.jsonl",
-    "_runtime/prompt/version.json"
+  "capabilities": [
+    {
+      "name": "prompt.compose",
+      "version": "1.6",
+      "description": "Compose BASE, TASK, CONTEXT, PROFILE, EXAMPLE, and EXTRA layers with deterministic priority"
+    },
+    {
+      "name": "prompt.context_detect",
+      "version": "2.0",
+      "description": "Detect project, language, task, test, UI, Tower Stack, and Three.js context signals"
+    },
+    {
+      "name": "prompt.context_state",
+      "version": "2.0",
+      "description": "Persist versioned context signals with a project fingerprint and consume them during pre-session composition"
+    }
   ],
   "dependencies": {
     "required": ["Python standard library"],
     "optional": ["DeepSeek-compatible HTTP endpoint for model-assisted classification"]
   },
-  "limitations": [
-    "AGENTS.md routing rules and the composer are separate procedural entry points",
-    "review and delivery orchestration are Markdown procedures, not enforced by this module"
-  ]
+  "credentials": [],
+  "health_checks": [
+    {
+      "command": "python -m modules.prompt.composer --list-contexts",
+      "description": "Verify the composer imports and can enumerate context prompt files",
+      "timeout": 30
+    }
+  ],
+  "storage": [
+    {
+      "type": "json",
+      "path": "_runtime/prompt/context-signals.json",
+      "tables": [],
+      "description": "Versioned detected context state with project fingerprint"
+    },
+    {
+      "type": "json",
+      "path": "_runtime/prompt",
+      "tables": [],
+      "description": "Composition logs and version snapshots"
+    },
+    {
+      "type": "markdown",
+      "path": "AGENTS_COMPOSED.md",
+      "tables": [],
+      "description": "Generated prompt composition consumed by OpenCode"
+    }
+  ],
+  "experimental": false
 }
