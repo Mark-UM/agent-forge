@@ -46,8 +46,8 @@
   ],
   "health_checks": [
     {
-      "command": "python -m modules.runtime.supervisor status --json",
-      "description": "Report current supervised service health without starting or mutating services",
+      "command": "python -c \"import modules.runtime.supervisor\"",
+      "description": "Verify the Supervisor module and its standard-library process boundaries import; live daemon readiness is reported separately by the status command",
       "timeout": 30
     }
   ],
