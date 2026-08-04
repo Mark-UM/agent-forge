@@ -1,0 +1,69 @@
+{
+  "name": "runtime",
+  "version": "1.0.0",
+  "description": "Authenticated local process supervisor for Browser and Scheduler daemons with bounded startup, health checks, restart limits, non-secret state, logs, and foreground command cleanup",
+  "entrypoints": {
+    "cli": "python -m modules.runtime.supervisor status --json"
+  },
+  "capabilities": [
+    {
+      "name": "runtime.supervise",
+      "version": "1.0",
+      "description": "Start, monitor, restart, and stop authenticated local Agent Forge services"
+    },
+    {
+      "name": "runtime.run",
+      "version": "1.0",
+      "description": "Run a foreground command while supervising selected services and clean up owned processes on exit"
+    },
+    {
+      "name": "runtime.health",
+      "version": "1.0",
+      "description": "Report authenticated service health, port state, PID ownership, and token fingerprints without exposing bearer tokens"
+    }
+  ],
+  "dependencies": {
+    "required": [
+      "Python standard library",
+      "modules.common.security"
+    ],
+    "optional": [
+      "Playwright for the Browser daemon",
+      "APScheduler for the Scheduler daemon"
+    ]
+  },
+  "credentials": [
+    {
+      "env": "AGENT_FORGE_BROWSER_TOKEN",
+      "required": false,
+      "description": "Optional explicit Browser bearer token; generated locally otherwise"
+    },
+    {
+      "env": "AGENT_FORGE_SCHEDULER_TOKEN",
+      "required": false,
+      "description": "Optional explicit Scheduler bearer token; generated locally otherwise"
+    }
+  ],
+  "health_checks": [
+    {
+      "command": "python -m modules.runtime.supervisor status --json",
+      "description": "Report current supervised service health without starting or mutating services",
+      "timeout": 30
+    }
+  ],
+  "storage": [
+    {
+      "type": "json",
+      "path": "_runtime/supervisor/state.json",
+      "tables": [],
+      "description": "Non-secret managed/adopted process metadata"
+    },
+    {
+      "type": "log",
+      "path": "_runtime/supervisor/logs",
+      "tables": [],
+      "description": "Per-service stdout and stderr logs"
+    }
+  ],
+  "experimental": false
+}
