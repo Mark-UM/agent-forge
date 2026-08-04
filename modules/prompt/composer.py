@@ -24,7 +24,8 @@ AGENTS_COMPOSED = PROJECT_ROOT / "AGENTS_COMPOSED.md"
 
 DEFAULT_PROFILE = "default"
 DEFAULT_TASK = None
-VERSION = "1.7.0"
+# Preserve the public 1.6 contract; context state has its own schema_version=2.
+VERSION = "1.6.0"
 
 PRIORITY_LADDER = [
     ("BASE", "Global invariants (constitutional, always loaded)"),
