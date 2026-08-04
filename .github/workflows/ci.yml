@@ -66,6 +66,7 @@ jobs:
           modules/search/tests/test_filter.py
           modules/search/tests/test_orchestrator.py
           modules/scheduler/tests/test_trigger_runtime.py
+          modules/runtime/tests/test_supervisor.py
           modules/registry/tests/test_strict_discovery.py
           modules/prompt/tests/test_context_composition.py
           modules/prompt/tests/test_context.py
