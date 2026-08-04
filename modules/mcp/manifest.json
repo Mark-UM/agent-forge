@@ -1,32 +1,33 @@
 {
   "name": "mcp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Self-hosted MCP servers with fail-closed network and database boundaries: guarded Fetch, true read-only SQLite, and timezone conversion",
   "entrypoints": {
     "mcp": "python -m modules.mcp.secure_fetch_mcp serve",
-    "fetch_cli": "python -m modules.mcp.secure_fetch_mcp fetch",
-    "sqlite_mcp": "python -m modules.mcp.sqlite_mcp serve",
-    "time_mcp": "python -m modules.mcp.time_mcp serve"
+    "cli": "python -m modules.mcp.secure_fetch_mcp --help"
   },
   "capabilities": [
     {
       "name": "mcp.fetch",
       "version": "1.1",
-      "description": "Fetch public HTTP(S) content as markdown or raw text with bounded reads, DNS/IP validation, private/metadata target blocking, and redirect revalidation (secure_fetch_mcp.py)"
+      "description": "Fetch public HTTP(S) content as markdown or raw text with bounded reads, DNS/IP validation, private/metadata target blocking, and redirect revalidation; serve with python -m modules.mcp.secure_fetch_mcp serve"
     },
     {
       "name": "mcp.sqlite",
       "version": "1.1",
-      "description": "SQLite query and schema inspection using URI mode=ro, PRAGMA query_only, and a deny-by-default write authorizer; optional execute requires explicit writable mode"
+      "description": "SQLite query and schema inspection using URI mode=ro, PRAGMA query_only, and a deny-by-default write authorizer; serve with python -m modules.mcp.sqlite_mcp serve and require explicit writable mode for execute"
     },
     {
       "name": "mcp.time",
       "version": "1.0",
-      "description": "Get current time in a timezone and convert times between timezones with DST gap/fold handling"
+      "description": "Get current time in a timezone and convert times between timezones with DST gap/fold handling; serve with python -m modules.mcp.time_mcp serve"
     }
   ],
   "dependencies": {
-    "required": ["Python standard library", "modules.common.security"],
+    "required": [
+      "Python standard library",
+      "modules.common.security"
+    ],
     "optional": []
   },
   "credentials": [],
