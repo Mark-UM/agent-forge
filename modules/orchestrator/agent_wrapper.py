@@ -1,49 +1,68 @@
 #!/usr/bin/env python3
-"""B1: Agent Wrapper — browser-use 适配层，端到端收集管道。
+"""Secure end-to-end web collection pipeline.
 
-Architecture:
-    1. Primary: browser-use Agent（LLM 驱动，自动决策）
-    2. Fallback: browser daemon HTTP API（手动 navigate → screenshot）
-    3. Vision: modules/vision/recognize.py 识别截图
-    4. Summarize: modules/search/aggregator.py 生成 Markdown
-    5. Write: 原子写入 output_path
+Backend order:
 
-Pipeline:
-    target URL → navigate → wait → screenshot → OCR/Vision → summarize → write file
+1. authenticated browser daemon with global request interception;
+2. fail-closed stdlib Fetch MCP for static content.
 
-Usage:
-    from modules.orchestrator.agent_wrapper import run_collection_pipeline
+The legacy ``browser-use`` backend is not selected by default because Agent
+Forge cannot currently install the shared DNS/IP network policy into every
+request that package may initiate.  An operator may explicitly opt into the
+reduced boundary with ``AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE=1``; the result
+is then marked with a security warning.
 
-    result = run_collection_pipeline(
-        target="https://example.com",
-        output_path="_runtime/reports/example.md"
-    )
+Reports are atomically written under ``_runtime`` or the OS temporary
+directory.  Dynamic collection prefers visible DOM text, performs a bounded
+number of scrolls for lazy content, and uses screenshot/Vision only when the
+DOM contains too little useful text or screenshot capture is explicitly
+requested.
 """
-import os
-import sys
+from __future__ import annotations
+
+from datetime import datetime, timezone
 import json
-import time
+import os
+from pathlib import Path
+import sys
 import tempfile
 import threading
-from pathlib import Path
-from datetime import datetime
-from urllib.parse import urlparse
+import time
+import urllib.error
+import urllib.request
 
 from modules.bootstrap.dependencies import activate_vendor_path
+from modules.common.security import (
+    UnsafeNetworkTarget,
+    load_or_create_service_token,
+    validate_outbound_url,
+)
 
-# ── Paths ──────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_VENDOR_LIBS = _PROJECT_ROOT / "vendor" / "python-libs"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 activate_vendor_path()
-
 _REPORTS_DIR = _PROJECT_ROOT / "_runtime" / "reports"
+_BROWSER_USE_AVAILABLE: bool | None = None
 
-# ── Lazy browser-use import ────────────────────────────────────
-_BROWSER_USE_AVAILABLE = None
+BROWSER_DAEMON_HOST = "127.0.0.1"
+BROWSER_DAEMON_PORT = int(os.environ.get("AGENT_FORGE_BROWSER_PORT", "9223"))
+MAX_DAEMON_RESPONSE_BYTES = 5_000_000
+MAX_COLLECTED_TEXT_CHARS = 200_000
+MAX_SCROLLS = 5
 
 
-def _check_browser_use() -> bool:
-    """Check if browser-use is available. Lazy import + cache."""
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def _browser_use_installed() -> bool:
     global _BROWSER_USE_AVAILABLE
     if _BROWSER_USE_AVAILABLE is not None:
         return _BROWSER_USE_AVAILABLE
@@ -55,21 +74,23 @@ def _check_browser_use() -> bool:
     return _BROWSER_USE_AVAILABLE
 
 
+def _check_browser_use() -> bool:
+    """Return whether the reduced-security backend was explicitly enabled."""
+
+    return _browser_use_installed() and _env_bool(
+        "AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", False
+    )
+
+
 def _validate_target(target: str) -> str:
-    """Accept only credential-free HTTP(S) collection targets."""
     if not isinstance(target, str) or not target.strip():
         raise ValueError("target must not be empty")
-    target = target.strip()
-    parsed = urlparse(target)
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("target must be an absolute HTTP(S) URL")
-    if parsed.username or parsed.password:
-        raise ValueError("target URLs containing credentials are not allowed")
-    return target
+    candidate = target.strip()
+    validate_outbound_url(candidate)
+    return candidate
 
 
 def _validate_output_path(output_path: str) -> str:
-    """Confine generated reports to ignored runtime or OS temporary storage."""
     candidate = Path(output_path).expanduser().resolve()
     if candidate.suffix.lower() != ".md":
         raise ValueError("output_path must use the .md extension")
@@ -83,49 +104,61 @@ def _validate_output_path(output_path: str) -> str:
     raise ValueError("output_path must be inside _runtime or the OS temporary directory")
 
 
-# ── Browser daemon client (fallback) ───────────────────────────
+def _browser_token() -> str:
+    return load_or_create_service_token(
+        "browser", runtime_root=_PROJECT_ROOT / "_runtime"
+    )
 
-BROWSER_DAEMON_PORT = 9223
-BROWSER_DAEMON_HOST = "127.0.0.1"
 
+def _call_browser_daemon(
+    endpoint: str,
+    method: str = "GET",
+    data: dict | None = None,
+    *,
+    timeout: float = 30,
+) -> dict:
+    """Call the authenticated browser daemon with a bounded response read."""
 
-def _call_browser_daemon(endpoint: str, method: str = "GET", data: dict = None) -> dict:
-    """Call browser daemon HTTP API (fallback mode).
-
-    Args:
-        endpoint: API path (e.g., "/navigate", "/screenshot")
-        method: HTTP method
-        data: JSON body for POST
-
-    Returns:
-        dict: Response JSON
-    """
-    import urllib.request
-    import urllib.error
-
+    if not isinstance(endpoint, str) or not endpoint.startswith("/"):
+        raise ValueError("endpoint must be an absolute daemon path")
     url = f"http://{BROWSER_DAEMON_HOST}:{BROWSER_DAEMON_PORT}{endpoint}"
-    headers = {"Content-Type": "application/json"}
-    body = json.dumps(data).encode("utf-8") if data else None
-
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {_browser_token()}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method=method,
+    )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.URLError as e:
-        return {"error": f"browser daemon unreachable: {e}"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# ── Vision module integration ──────────────────────────────────
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(MAX_DAEMON_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_DAEMON_RESPONSE_BYTES:
+                return {"error": "browser daemon response exceeded safety limit"}
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                return {"error": "browser daemon returned a non-object response"}
+            if payload.get("ok") is False and "error" in payload:
+                return {"error": str(payload["error"]), "daemon_response": payload}
+            return payload
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read(MAX_DAEMON_RESPONSE_BYTES).decode("utf-8"))
+        except Exception:
+            detail = {"error": str(exc)}
+        return {
+            "error": f"browser daemon HTTP {exc.code}: {detail.get('error', exc.reason)}"
+        }
+    except urllib.error.URLError as exc:
+        return {"error": f"browser daemon unreachable: {exc}"}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def _recognize_screenshot(screenshot_path: str) -> dict:
-    """Call vision module to recognize screenshot content via subprocess CLI.
-
-    Returns:
-        dict: {text: str, success: bool, error: str}
-    """
     import subprocess
 
     try:
@@ -138,66 +171,68 @@ def _recognize_screenshot(screenshot_path: str) -> dict:
         )
         if result.returncode == 0:
             return {"text": result.stdout.strip(), "success": True}
-        else:
-            return {"text": "", "success": False, "error": result.stderr.strip() or "vision CLI failed"}
+        return {
+            "text": "",
+            "success": False,
+            "error": result.stderr.strip() or "vision CLI failed",
+        }
     except subprocess.TimeoutExpired:
         return {"text": "", "success": False, "error": "vision CLI timeout (120s)"}
     except FileNotFoundError:
         return {"text": "", "success": False, "error": "python executable not found"}
-    except Exception as e:
-        return {"text": "", "success": False, "error": str(e)}
-
-
-# ── Aggregator integration ─────────────────────────────────────
+    except Exception as exc:
+        return {"text": "", "success": False, "error": str(exc)}
 
 
 def _summarize_content(content: str, query: str = "") -> str:
-    """Call aggregator to generate Markdown summary.
-
-    Returns:
-        str: Markdown formatted summary
-    """
+    bounded = content[:MAX_COLLECTED_TEXT_CHARS]
     try:
         from modules.search.aggregator import aggregate_results
-        # Wrap content as a single "search result" for aggregator
-        results = [{"title": "Collected Content", "snippet": content[:5000], "url": ""}]
+
+        results = [{"title": "Collected Content", "snippet": bounded, "url": ""}]
         aggregated = aggregate_results(results, query=query)
         if isinstance(aggregated, dict):
             return aggregated.get("markdown", str(aggregated))
         return str(aggregated)
     except ImportError:
-        # Fallback: simple formatting
-        return f"# Collection Report\n\n**Query**: {query}\n\n**Content**:\n\n{content[:5000]}"
-    except Exception as e:
-        return f"# Collection Report\n\n**Error**: {e}\n\n**Raw Content**:\n\n{content[:5000]}"
-
-
-# ── Atomic file write ──────────────────────────────────────────
+        return f"# Collection Report\n\n**Query**: {query}\n\n**Content**:\n\n{bounded}"
+    except Exception as exc:
+        return (
+            f"# Collection Report\n\n**Error**: {exc}\n\n"
+            f"**Raw Content**:\n\n{bounded}"
+        )
 
 
 def _atomic_write(filepath: str, content: str) -> None:
-    """Atomically write content to file."""
     parent = os.path.dirname(filepath) or "."
     os.makedirs(parent, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
+    fd, temporary = tempfile.mkstemp(
         dir=parent, suffix=".tmp", prefix=Path(filepath).stem + "_"
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp_path, filepath)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, filepath)
     except Exception:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
         raise
 
 
-# ── Primary: browser-use Agent ─────────────────────────────────
-
-
 def _create_browser_use_agent(target: str, task: str):
-    """Build a configured browser-use Agent without exposing API keys."""
+    """Construct the explicitly opted-in reduced-security backend."""
+
     target = _validate_target(target)
+    if not _env_bool("AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", False):
+        raise RuntimeError(
+            "browser-use is disabled because its network requests are not guarded by "
+            "the Agent Forge SSRF policy"
+        )
+
     browser_use_key = os.environ.get("BROWSER_USE_API_KEY", "").strip()
     deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     anthropic_key = (
@@ -244,7 +279,6 @@ def _create_browser_use_agent(target: str, task: str):
 
 
 def _run_browser_use_agent(agent):
-    """Run the async browser-use API behind the synchronous project seam."""
     import asyncio
 
     max_steps = int(os.environ.get("BROWSER_USE_MAX_STEPS", "25"))
@@ -262,7 +296,7 @@ def _run_browser_use_agent(agent):
     def runner() -> None:
         try:
             outcome.append(asyncio.run(coroutine))
-        except BaseException as exc:  # propagated to the calling thread
+        except BaseException as exc:
             failure.append(exc)
 
     thread = threading.Thread(target=runner, daemon=True)
@@ -274,10 +308,6 @@ def _run_browser_use_agent(agent):
 
 
 def _run_with_browser_use(target: str, task: str, output_path: str) -> dict:
-    """Run collection pipeline using browser-use Agent.
-
-    This is the primary path when browser-use is installed.
-    """
     try:
         agent = _create_browser_use_agent(target, task)
         history = _run_browser_use_agent(agent)
@@ -293,8 +323,9 @@ def _run_with_browser_use(target: str, task: str, output_path: str) -> dict:
 
 - **Target**: {target}
 - **Task**: {task}
-- **Backend**: browser_use
-- **Generated**: {datetime.now().isoformat()}
+- **Backend**: browser_use (explicit reduced-security override)
+- **Generated**: {datetime.now(timezone.utc).isoformat()}
+- **Security warning**: backend network requests are not intercepted by Agent Forge
 
 ---
 
@@ -306,88 +337,145 @@ def _run_with_browser_use(target: str, task: str, output_path: str) -> dict:
             "backend": "browser_use",
             "output_path": output_path,
             "content_length": len(content),
+            "degraded_security": True,
+            "warnings": ["unguarded_browser_use_explicitly_enabled"],
         }
-    except Exception as e:
-        return {"success": False, "error": str(e), "backend": "browser_use"}
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "backend": "browser_use"}
 
 
-# ── Fallback: browser daemon + vision + aggregator ────────────
+def _bounded_scroll_count() -> int:
+    try:
+        count = int(os.environ.get("AGENT_FORGE_COLLECTION_SCROLLS", "2"))
+    except ValueError as exc:
+        raise ValueError("AGENT_FORGE_COLLECTION_SCROLLS must be an integer") from exc
+    if not 0 <= count <= MAX_SCROLLS:
+        raise ValueError(f"AGENT_FORGE_COLLECTION_SCROLLS must be between 0 and {MAX_SCROLLS}")
+    return count
+
+
+def _merge_text_snapshots(snapshots: list[str]) -> str:
+    """Preserve order while dropping duplicate complete snapshots."""
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in snapshots:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return "\n\n--- lazy-load snapshot ---\n\n".join(unique)[:MAX_COLLECTED_TEXT_CHARS]
 
 
 def _run_with_browser_daemon(target: str, task: str, output_path: str) -> dict:
-    """Run collection pipeline using browser daemon HTTP API.
-
-    Fallback when browser-use is not available.
-    """
-    steps = []
-
-    # Step 1: Navigate to target
-    nav_result = _call_browser_daemon("/navigate", method="POST", data={"url": target})
-    steps.append({"step": "navigate", "result": nav_result})
-    if "error" in nav_result:
-        return {"success": False, "backend": "browser_daemon", "steps": steps, "error": nav_result["error"]}
-
-    # Step 2: Wait for page load
-    time.sleep(3)
-    steps.append({"step": "wait", "result": {"waited": 3}})
-
-    # Step 3: Screenshot
-    screenshot_path = str(_REPORTS_DIR / f"screenshot_{int(time.time())}.png")
-    screenshot_result = _call_browser_daemon(
-        "/screenshot", method="POST", data={"path": screenshot_path}
+    steps: list[dict] = []
+    navigation = _call_browser_daemon(
+        "/navigate", method="POST", data={"url": target}, timeout=45
     )
-    steps.append({"step": "screenshot", "result": screenshot_result})
-    if "error" in screenshot_result:
-        return {"success": False, "backend": "browser_daemon", "steps": steps, "error": screenshot_result["error"]}
-
-    # Step 4: Recognize screenshot content
-    actual_path = screenshot_result.get("path", screenshot_path)
-    recognize_result = _recognize_screenshot(actual_path)
-    steps.append({"step": "recognize", "result": recognize_result})
-
-    # Step 5: Summarize
-    content_text = recognize_result.get("text", "")
-    if not content_text:
+    steps.append({"step": "navigate", "result": navigation})
+    if "error" in navigation:
         return {
             "success": False,
             "backend": "browser_daemon",
             "steps": steps,
-            "error": "no text recognized from screenshot",
+            "error": navigation["error"],
         }
 
-    summary = _summarize_content(content_text, query=task)
-    steps.append({"step": "summarize", "result": {"summary_length": len(summary)}})
+    wait_result = _call_browser_daemon(
+        "/wait", method="POST", data={"selector": "body", "timeout": 15_000}
+    )
+    steps.append({"step": "wait_for_body", "result": wait_result})
 
-    # Step 6: Write to file
+    snapshots: list[str] = []
+    text_result = _call_browser_daemon("/text", method="POST", data={})
+    steps.append(
+        {
+            "step": "extract_visible_text",
+            "result": {"ok": "error" not in text_result, "length": len(text_result.get("text", ""))},
+        }
+    )
+    if text_result.get("text"):
+        snapshots.append(text_result["text"])
+
+    for index in range(_bounded_scroll_count()):
+        scroll_result = _call_browser_daemon(
+            "/scroll",
+            method="POST",
+            data={"x": 0, "y": min((index + 1) * 250_000, 1_000_000)},
+        )
+        steps.append({"step": f"scroll_{index + 1}", "result": scroll_result})
+        if "error" in scroll_result:
+            break
+        time.sleep(1)
+        next_text = _call_browser_daemon("/text", method="POST", data={})
+        if next_text.get("text"):
+            snapshots.append(next_text["text"])
+
+    content_text = _merge_text_snapshots(snapshots)
+    screenshot_path = ""
+    vision_text = ""
+    capture = _env_bool("AGENT_FORGE_COLLECTION_CAPTURE_SCREENSHOT", False)
+    if capture or len(content_text) < 200:
+        screenshot_path = str(_REPORTS_DIR / f"screenshot_{int(time.time())}.png")
+        screenshot_result = _call_browser_daemon(
+            "/screenshot", method="POST", data={"path": screenshot_path}
+        )
+        steps.append({"step": "screenshot", "result": screenshot_result})
+        if "error" not in screenshot_result:
+            screenshot_path = screenshot_result.get("path", screenshot_path)
+            recognition = _recognize_screenshot(screenshot_path)
+            steps.append({"step": "recognize", "result": recognition})
+            vision_text = recognition.get("text", "")
+
+    combined = content_text
+    if vision_text:
+        combined = (combined + "\n\n--- visual recognition ---\n\n" + vision_text).strip()
+    if not combined:
+        return {
+            "success": False,
+            "backend": "browser_daemon",
+            "steps": steps,
+            "error": "browser returned no visible or recognized content",
+        }
+
+    summary = _summarize_content(combined, query=task)
+    final_url = navigation.get("url", target)
     report_content = f"""# Collection Report
 
 - **Target**: {target}
+- **Final URL**: {final_url}
 - **Task**: {task}
-- **Backend**: browser_daemon
-- **Generated**: {datetime.now().isoformat()}
-- **Screenshot**: {actual_path}
+- **Backend**: authenticated browser daemon
+- **Generated**: {datetime.now(timezone.utc).isoformat()}
+- **DOM characters**: {len(content_text)}
+- **Vision characters**: {len(vision_text)}
+- **Screenshot**: {screenshot_path or "not captured"}
 
 ---
 
 {summary}
 """
     _atomic_write(output_path, report_content)
-    steps.append({"step": "write", "result": {"path": output_path, "size": len(report_content)}})
-
+    steps.append(
+        {"step": "write", "result": {"path": output_path, "size": len(report_content)}}
+    )
     return {
         "success": True,
         "backend": "browser_daemon",
         "output_path": output_path,
+        "source_url": final_url,
+        "content_length": len(combined),
         "steps": steps,
+        "security": {"authenticated": True, "network_policy": "fail_closed"},
     }
 
 
 def _run_with_fetch(target: str, task: str, output_path: str) -> dict:
-    """Collect static HTTP content without browser or third-party dependencies."""
     try:
-        from modules.mcp.fetch_mcp import fetch_url
+        from modules.mcp.secure_fetch_mcp import fetch_url
 
-        fetched = fetch_url(target, max_length=50000)
+        fetched = fetch_url(target, max_length=50_000)
         content = fetched.get("content", "")
         if not content:
             return {"success": False, "backend": "fetch", "error": "empty response"}
@@ -395,9 +483,11 @@ def _run_with_fetch(target: str, task: str, output_path: str) -> dict:
         report = f"""# Collection Report
 
 - **Target**: {target}
+- **Final URL**: {fetched.get("url", target)}
 - **Task**: {task}
-- **Backend**: fetch
-- **Generated**: {datetime.now().isoformat()}
+- **Backend**: secure fetch
+- **Generated**: {datetime.now(timezone.utc).isoformat()}
+- **Bytes read**: {fetched.get("bytes_read", "unknown")}
 
 ---
 
@@ -410,12 +500,10 @@ def _run_with_fetch(target: str, task: str, output_path: str) -> dict:
             "output_path": output_path,
             "source_url": fetched.get("url", target),
             "content_length": len(content),
+            "security": {"network_policy": "fail_closed"},
         }
     except Exception as exc:
         return {"success": False, "backend": "fetch", "error": str(exc)}
-
-
-# ── Public API ─────────────────────────────────────────────────
 
 
 def run_collection_pipeline(
@@ -423,21 +511,9 @@ def run_collection_pipeline(
     output_path: str = "",
     task: str = "collect and summarize content",
 ) -> dict:
-    """Run end-to-end collection pipeline.
-
-    Automatically selects browser-use (primary) or browser daemon (fallback).
-
-    Args:
-        target: URL to collect from
-        output_path: Path to write report (default: _runtime/reports/<timestamp>.md)
-        task: Task description for the agent
-
-    Returns:
-        dict: {success, backend, output_path, steps, error}
-    """
     try:
         target = _validate_target(target)
-    except ValueError as exc:
+    except (ValueError, UnsafeNetworkTarget) as exc:
         return {"success": False, "backend": "none", "error": str(exc), "errors": []}
 
     if not output_path:
@@ -458,8 +534,6 @@ def run_collection_pipeline(
     daemon_result = _run_with_browser_daemon(target, task, output_path)
     if daemon_result.get("success"):
         if errors:
-            daemon_result["primary_backend"] = "browser_use"
-            daemon_result["primary_error"] = errors[0]
             daemon_result["fallback_errors"] = errors.copy()
         return daemon_result
     errors.append(daemon_result.get("error", "browser daemon failed"))
@@ -478,44 +552,50 @@ def run_collection_pipeline(
 
 
 def get_backend_status() -> dict:
-    """Check which backend is available.
-
-    Returns:
-        dict: {browser_use_available, browser_daemon_reachable}
-    """
+    installed = _browser_use_installed()
+    explicitly_enabled = _env_bool("AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", False)
     status = {
-        "browser_use_available": _check_browser_use(),
+        "browser_use_installed": installed,
+        "browser_use_available": installed and explicitly_enabled,
+        "browser_use_security": (
+            "explicit_reduced_security_override"
+            if installed and explicitly_enabled
+            else "disabled_until_network_policy_adapter_exists"
+        ),
         "browser_daemon_reachable": False,
+        "secure_fetch_available": False,
     }
 
-    # Check browser daemon
-    result = _call_browser_daemon("/status")
-    if "error" not in result:
+    daemon_status = _call_browser_daemon("/status")
+    if "error" not in daemon_status:
         status["browser_daemon_reachable"] = True
-        status["browser_daemon_status"] = result
+        status["browser_daemon_status"] = daemon_status
 
+    try:
+        from modules.mcp import secure_fetch_mcp  # noqa: F401
+        status["secure_fetch_available"] = True
+    except ImportError:
+        pass
     return status
 
 
 if __name__ == "__main__":
-    # CLI: python -m modules.orchestrator.agent_wrapper [status|collect]
     if len(sys.argv) < 2:
         print("Usage: python -m modules.orchestrator.agent_wrapper [status|collect] [args]")
-        sys.exit(0)
+        raise SystemExit(0)
 
-    cmd = sys.argv[1]
-
-    if cmd == "status":
+    command = sys.argv[1]
+    if command == "status":
         print(json.dumps(get_backend_status(), indent=2, ensure_ascii=False))
-
-    elif cmd == "collect":
+    elif command == "collect":
         if len(sys.argv) < 3:
             print("Usage: collect <url> [output_path]")
-            sys.exit(1)
-        url = sys.argv[2]
-        out = sys.argv[3] if len(sys.argv) > 3 else ""
-        result = run_collection_pipeline(target=url, output_path=out)
+            raise SystemExit(1)
+        result = run_collection_pipeline(
+            target=sys.argv[2],
+            output_path=sys.argv[3] if len(sys.argv) > 3 else "",
+        )
         print(json.dumps(result, indent=2, ensure_ascii=False))
-
     else:
-        print(f"Unknown command: {cmd}")
+        print(f"Unknown command: {command}")
+        raise SystemExit(2)
