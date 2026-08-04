@@ -39,12 +39,18 @@ class FakeContext:
 
 def test_navigation_rejects_literal_loopback():
     with pytest.raises((UnsafeNetworkTarget, ValueError)):
-        daemon._validate_url("http://127.0.0.1:8080/admin")
+        daemon._validate_public_url("http://127.0.0.1:8080/admin")
 
 
 def test_navigation_rejects_url_credentials():
     with pytest.raises((UnsafeNetworkTarget, ValueError)):
-        daemon._validate_url("https://user:password@example.com/")
+        daemon._validate_public_url("https://user:password@example.com/")
+
+
+def test_syntax_validator_remains_backward_compatible_for_loopback():
+    assert daemon._validate_url("http://127.0.0.1:8080/admin") == (
+        "http://127.0.0.1:8080/admin"
+    )
 
 
 def test_route_allows_local_data_resource():
