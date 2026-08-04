@@ -55,6 +55,9 @@ jobs:
           modules/orchestrator/tests/test_collection_security.py
           modules/orchestrator/tests/test_file_indexer_roots.py
           modules/search/tests/test_hardened_service.py
+          modules/search/tests/test_contract_phase1.py
+          modules/search/tests/test_filter.py
+          modules/search/tests/test_orchestrator.py
           modules/registry/tests/test_strict_discovery.py
           modules/prompt/tests/test_context_composition.py
 
