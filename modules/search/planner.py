@@ -59,7 +59,11 @@ PLANNER_MODES = {
 DEFAULT_PLANNER_MODE = 'pro'
 
 # 子查询上限（成本控制）
+# MAX_SUB_QUERIES 是默认值（CLI 不传 --max-subqueries 时使用）。
+# HARD_MAX_SUB_QUERIES 是绝对安全上限：caller 传入更大的值会被 clamp 到此值并打 warning。
+# 这样 --deep-research（max_subqueries=10）能被正确尊重，同时防止恶意/误传超大值。
 MAX_SUB_QUERIES = 5
+HARD_MAX_SUB_QUERIES = 10
 MIN_SUB_QUERIES = 1
 
 
@@ -141,10 +145,16 @@ def _call_planner_api(user_query, api_key=None, timeout=30,
                          f'Must be one of: {list(PLANNER_MODES.keys())}')
 
     # 校验 max_subqueries
+    # S6 fix: 不再用 MAX_SUB_QUERIES(=5) 作为硬 clamp，而是用 HARD_MAX_SUB_QUERIES(=10)。
+    # 这样 caller（如 --deep-research 的 max_subqueries=10）能被正确尊重。
+    # 仅当超过 HARD_MAX_SUB_QUERIES 时才 clamp 并打印 warning。
     if not isinstance(max_subqueries, int) or max_subqueries < MIN_SUB_QUERIES:
         max_subqueries = MIN_SUB_QUERIES
-    elif max_subqueries > MAX_SUB_QUERIES:
-        max_subqueries = MAX_SUB_QUERIES
+    elif max_subqueries > HARD_MAX_SUB_QUERIES:
+        print(f"警告: max_subqueries={max_subqueries} 超过 HARD_MAX_SUB_QUERIES="
+              f"{HARD_MAX_SUB_QUERIES}, 已 clamp 到 {HARD_MAX_SUB_QUERIES}",
+              file=sys.stderr)
+        max_subqueries = HARD_MAX_SUB_QUERIES
 
     # 出境 PII 脱敏：Planner prompt 不应含 PII
     redacted_query, redact_meta = _redact_outbound(user_query)
@@ -203,7 +213,9 @@ def _call_planner_api(user_query, api_key=None, timeout=30,
     # 去除可能的 markdown fences
     text = _strip_markdown_fences(text)
 
-    return _parse_planner_json(text)
+    # S6 fix: 把 max_subqueries 传给 _parse_planner_json，让 caller 的值真正生效。
+    # 之前 _parse_planner_json(text) 用默认 5，导致 _call_planner_api 的 clamp 结果被忽略。
+    return _parse_planner_json(text, max_subqueries=max_subqueries)
 
 
 def _strip_markdown_fences(text):
@@ -232,7 +244,10 @@ def _parse_planner_json(text, max_subqueries=MAX_SUB_QUERIES):
 
     Args:
         text: 模型输出的文本（已去除 markdown fences）
-        max_subqueries: 子查询上限（动态传入，默认 5）
+        max_subqueries: 子查询上限（动态传入，默认 MAX_SUB_QUERIES=5）。
+            S6 fix: 不再硬限制为 5，可接受 caller 传入的更大值（如 10 用于
+            --deep-research）。HARD_MAX_SUB_QUERIES=10 由 _call_planner_api 在
+            调用前 clamp，本函数信任传入值。
 
     Returns:
         dict: {
@@ -388,10 +403,12 @@ def _cli():
                         default=DEFAULT_PLANNER_MODE,
                         help=f'Planner 模型选择（默认 {DEFAULT_PLANNER_MODE}）')
     # spec §3.2: --max-subqueries 参数
+    # S6 fix: choices 允许 1-HARD_MAX_SUB_QUERIES(=10)，以支持 --deep-research 场景。
     p_plan.add_argument('--max-subqueries', type=int,
                         default=MAX_SUB_QUERIES,
-                        choices=range(MIN_SUB_QUERIES, MAX_SUB_QUERIES + 1),
-                        help=f'子查询上限 {MIN_SUB_QUERIES}-{MAX_SUB_QUERIES}（默认 {MAX_SUB_QUERIES}）')
+                        choices=range(MIN_SUB_QUERIES, HARD_MAX_SUB_QUERIES + 1),
+                        help=f'子查询上限 {MIN_SUB_QUERIES}-{HARD_MAX_SUB_QUERIES}'
+                             f'（默认 {MAX_SUB_QUERIES}）')
 
     # prompt 子命令：打印加载的 prompt 模板
     sub.add_parser('show-prompt', help='打印当前加载的 Planner prompt 模板')

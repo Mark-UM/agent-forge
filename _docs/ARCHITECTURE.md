@@ -1,6 +1,6 @@
 # AgentForge Architecture
 
-Status date: 2026-08-02. This is the maintained architecture reference.
+Status date: 2026-08-04. This is the maintained architecture reference.
 
 ## System boundary
 
@@ -84,17 +84,17 @@ clones and junctions are not portable repository assets.
 | `delivery` | six-category TS/Vite static checklist | heuristic, project-convention specific |
 | `dispatch` | model-role guard | model call optional |
 | `integration_check` | regex-based TS integration checks | not compiler/runtime analysis |
-| `mcp` | fetch, SQLite, and time JSON-RPC servers | SQLite mutation opt-in |
+| `mcp` | fetch, SQLite, and time MCP JSON-RPC servers | SQLite mutation opt-in; fetch uses chunked read with byte limit; time MCP uses `astimezone()` for aware datetimes |
 | `memory` | atomic lessons/ADRs, structural health, task review | explicit calls; private sources remain ignored |
 | `orchestrator` | collection, Chroma index, action extraction, schedule storage | external keys/services still optional at operation time |
 | `prompt` | composition, classification, contexts, experiments | classifier network call optional |
-| `scheduler` | APScheduler HTTP service and atomic job persistence | separate from SQLite schedule records |
+| `scheduler` | APScheduler HTTP service and atomic job persistence | single SQLite source (`_runtime/mcp-sqlite.db`); legacy `jobs.json` migrated |
 | `search` | privacy/history/scoring/planning/aggregation/MCP helpers | live OpenCode MCP callbacks are procedural |
 | `ui_check` | regex-based UI conventions | not visual/runtime testing |
-| `vision` | image/PDF recognition and clipboard adapter | SiliconFlow key/network required for recognition |
+| `vision` | image/PDF recognition and clipboard adapter | SiliconFlow key/network required; PDF limits: file size, page count, per-page/total pixels, request batching |
 
-The current first-party module inventory is 124 files: 107 Python files (53
-source and 54 tests) plus manifests/templates/rule data.
+The current first-party module inventory is 125 files: 108 Python files (53
+source and 55 tests) plus manifests/templates/rule data.
 
 ## Key flows
 
@@ -119,14 +119,41 @@ cache/history, ranking, verification, aggregation, and injectable orchestration
 callbacks. The default Python CLI cannot independently call OpenCode MCP tools;
 its dry run is a plan rather than proof of live provider execution.
 
+The `SearchOrchestrator` pipeline uses a typed contract model with explicit
+`STEP_ORDER`: `validate_request → normalize_query → plan → final_cache_lookup
+→ provider_cache_lookup → provider_execute → normalize_results → deduplicate
+→ rank → aggregate → verify → format → cache_store`. Stream and prewarm are
+external capabilities, not pipeline steps. `aggregate_pre` has been removed;
+no dead steps remain in `STEP_ORDER`. `aggregator_fn` and `cache_store_fn`
+are invoked in-pipeline (not just declared). The `sub_queries` field is the
+canonical name; `subqueries` is a deprecated compatibility read. Dry-run
+reuses `is_step_enabled()` with an explicit `STEP_CONFIG_KEYS` mapping (no
+`enable_{step}` guessing). Verification status appears in `formatted_output`,
+not just side fields. The `VerificationStatus` enum uses seven states
+(`NOT_REQUESTED`/`NOT_RUN`/`WEAK_SUPPORT`/`PARTIALLY_SUPPORTED`/`VERIFIED`/
+`CONTRADICTED`/`ERROR`); keyword overlap is reported as
+`lexical_overlap_score`, never as `VERIFIED`. Parallel execution uses
+`shutdown(wait=False, cancel_futures=True)` and marks unfinished tasks as
+`abandoned`.
+
 ### Scheduling and Memory
 
-SQLite schedule CRUD under `_runtime/mcp-sqlite.db` is distinct from timed jobs
-under `_runtime/scheduler/jobs.json`. Scheduler job types are `file_reindex`,
-`report_collect`, `memory_review`, `action_extract`, and exact-whitelist
-`custom`. Without APScheduler, creation is refused rather than persisted as a
-false-active job. Malformed persistence is preserved in a timestamped corrupt
-backup.
+Scheduler state has a single authoritative source:
+`_runtime/mcp-sqlite.db` (SQLite). Both the `schedules` table (action items)
+and the `scheduler_jobs` table (cron jobs) live in this same database file.
+The legacy `jobs.json` file is migrated idempotently on daemon startup with a
+timestamped backup; no new writes go to `jobs.json`. Scheduler job types are
+`file_reindex`, `report_collect`, `memory_review`, `action_extract`, and
+exact-whitelist `custom`. The `recurrence` field is rejected at the
+schedule-store layer; recurring jobs must use the scheduler's job model.
+Without APScheduler, creation is refused rather than persisted as a
+false-active job. The HTTP server uses `ThreadingHTTPServer` to prevent
+long-running jobs from blocking status queries.
+
+Action extraction uses `response_format=json_object` with a strict
+`{"actions": [...]}` schema. `due_at` is validated as ISO 8601 with timezone
+handling. Model selection routes through the Dispatch Guard
+(`resolve_model("action_extraction")`) rather than hardcoding.
 
 Memory lessons and ADRs are atomic explicit writes. ADR allocation is protected
 across local threads/processes. `review_memory` reads only explicit unchecked
@@ -153,4 +180,6 @@ guarantee removal of every sensitive value.
 - external skill clone/junction installation is not tracked;
 - Browser and Scheduler lifecycle supervision remains manual;
 - no CI currently runs the documented checks;
-- broad Search provider retry/circuit-breaker behavior is not unified.
+- broad Search provider retry/circuit-breaker behavior is not unified;
+- Memory API unification (M1) and static checker AST layering (C1) are
+  deferred low-severity items — see `_docs/REMEDIATION_MATRIX.md`.

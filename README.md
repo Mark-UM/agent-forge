@@ -3,7 +3,7 @@
 AgentForge is a Windows-oriented OpenCode workspace containing prompt policy,
 MCP definitions, custom tools, reusable skills, Python utilities, and two
 optional local daemons. This repository describes the working tree as of
-2026-08-02; configured, installed, authenticated, reachable, and tested are
+2026-08-04; configured, installed, authenticated, reachable, and tested are
 separate states.
 
 ## Current inventory
@@ -17,22 +17,31 @@ separate states.
 | Custom tools | 2 TypeScript files exporting 1 Vision and 9 Browser tools |
 | Review agents | 3 read-only definitions: code, structure, risk |
 | Skills | 6 repository-owned skills; ignored upstream clones/junctions are local environment state |
-| Python modules | 124 first-party files; 107 Python files (53 source, 54 tests) |
+| Python modules | 125 first-party files; 108 Python files (53 source, 55 tests) |
 | Local services | Browser `127.0.0.1:9223`; Scheduler `127.0.0.1:9225` |
 
 ## Implemented behavior
 
-- five-layer prompt composition, routing helpers, and experiment logs;
-- image/PDF Vision plus clipboard adaptation;
+- five-layer prompt composition with explicit priority declaration, routing
+  helpers, and experiment logs;
+- image/PDF Vision with configurable resource limits (file size, page count,
+  pixel caps, request batching) plus clipboard adaptation;
 - Playwright/Chromium Browser daemon with project-local cookie/storage state;
 - URL collection through browser-use, Browser/Vision, and static-fetch
   fallbacks with backend/error provenance;
-- Search privacy/history/cache/scoring/planning/aggregation plus academic MCPs;
-- stdlib fetch, read-only-by-default SQLite, and time MCP servers;
-- APScheduler jobs, action extraction, ChromaDB indexing, and SQLite schedule
-  storage;
+- Search pipeline with typed contract model (`sub_queries` canonical field),
+  in-pipeline `aggregator_fn`/`cache_store_fn` invocation, verification in
+  formatted output, DST-aware prewarm timestamps, and parallel timeout with
+  `abandoned` marking;
+- stdlib fetch (chunked read with byte limit), read-only-by-default SQLite,
+  and time MCP (aware datetime via `astimezone()`, DST gap detection);
+- APScheduler jobs with single SQLite state source (legacy `jobs.json`
+  migrated), action extraction with `{"actions": [...]}` schema and
+  `due_at` ISO 8601 validation, ChromaDB indexing;
 - explicit atomic Memory lessons/ADRs, health checks, and read-only task review;
-- TypeScript/Vite scaffold generation and static integration/UI/delivery checks.
+- TypeScript/Vite scaffold generation and static integration/UI/delivery checks;
+- prompt reference checker validating all cross-references (agents, skills,
+  commands, modules) across the repository.
 
 ## Important boundaries
 

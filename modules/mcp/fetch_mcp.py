@@ -52,6 +52,12 @@ MAX_CONTENT_CAP = 50000     # Hard cap to prevent memory exhaustion
 DEFAULT_TIMEOUT = 30        # HTTP timeout (seconds)
 DEFAULT_USER_AGENT = 'Mozilla/5.0 (compatible; fetch-mcp/1.0; +https://opencode.ai)'
 
+# R2-6: start_index must not infinitely expand the read limit.
+# MAX_START_INDEX caps pagination depth; MAX_NETWORK_BYTES caps total bytes
+# read from the network regardless of start_index + max_length.
+MAX_START_INDEX = 500000       # 500K chars max pagination depth
+MAX_NETWORK_BYTES = 500000     # 500KB hard cap on network read
+
 # Content types we process as HTML
 HTML_CONTENT_TYPES = (
     'text/html',
@@ -252,10 +258,14 @@ def fetch_url(url: str, max_length: int = DEFAULT_MAX_LENGTH,
             'truncated': bool,
             'start_index': int,
             'total_length': int,
+            'max_start_index': int,
+            'bytes_read': int,
+            'network_truncated': bool,
+            'total_length_known': bool,
         }
 
     Raises:
-        ValueError: if URL is invalid
+        ValueError: if URL is invalid or start_index exceeds MAX_START_INDEX
         urllib.error.URLError: if fetch fails
     """
     if not url:
@@ -267,6 +277,14 @@ def fetch_url(url: str, max_length: int = DEFAULT_MAX_LENGTH,
         raise ValueError(f"Invalid URL: {url}")
     if parsed.scheme not in ('http', 'https'):
         raise ValueError(f"Unsupported scheme: {parsed.scheme}")
+
+    # R2-6: start_index must not exceed MAX_START_INDEX
+    if start_index < 0:
+        raise ValueError(f"start_index must be >= 0, got {start_index}")
+    if start_index > MAX_START_INDEX:
+        raise ValueError(
+            f"start_index {start_index} exceeds MAX_START_INDEX {MAX_START_INDEX}"
+        )
 
     # Cap max_length
     max_length = min(max_length, MAX_CONTENT_CAP)
@@ -289,13 +307,49 @@ def fetch_url(url: str, max_length: int = DEFAULT_MAX_LENGTH,
         status_code = resp.status
         content_type = resp.headers.get('Content-Type', '').split(';')[0].strip().lower()
 
-        # Read content (handle encoding)
-        raw_bytes = resp.read()
+        # R2-6: Read Content-Length header to determine if total length is known.
+        content_length_header = resp.headers.get('Content-Length')
+        # Header may exist but be empty or non-numeric — guard against int('').
+        if content_length_header and content_length_header.strip().isdigit():
+            total_length_known = True
+            declared_total_bytes = int(content_length_header)
+        else:
+            total_length_known = False
+            declared_total_bytes = None
+
+        # V2 fix: Read content in chunks with early stop
+        # Instead of reading the entire response (resp.read()), we read in
+        # chunks and stop when we have enough bytes to produce max_length chars.
+        # This prevents memory exhaustion on very large responses.
+        #
+        # R2-6: byte_limit is capped by MAX_NETWORK_BYTES so that a large
+        # start_index does not infinitely expand the read limit.
+        # We read more than strictly needed to handle multi-byte chars correctly.
+        byte_limit = (max_length + start_index) * 4 + 8192  # 4 bytes/char + buffer
+        byte_limit = min(byte_limit, MAX_NETWORK_BYTES)  # R2-6: hard cap
+
         # Detect encoding from Content-Type header
         encoding = 'utf-8'
         content_type_full = resp.headers.get('Content-Type', '')
         if 'charset=' in content_type_full:
             encoding = content_type_full.split('charset=')[-1].split(';')[0].strip()
+
+        # V2: Chunked read with early stop
+        chunks = []
+        total_bytes_read = 0
+        network_truncated = False
+
+        while True:
+            chunk = resp.read(8192)  # Read 8KB at a time
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total_bytes_read += len(chunk)
+            if total_bytes_read >= byte_limit:
+                network_truncated = True
+                break
+
+        raw_bytes = b''.join(chunks)
 
         try:
             html_text = raw_bytes.decode(encoding, errors='replace')
@@ -318,8 +372,10 @@ def fetch_url(url: str, max_length: int = DEFAULT_MAX_LENGTH,
         elif start_index >= total_length:
             content = ''
 
-        truncated = len(content) > max_length
-        if truncated:
+        # V2: truncated if either the network read was cut short OR
+        # the decoded content exceeds max_length
+        truncated = network_truncated or len(content) > max_length
+        if len(content) > max_length:
             content = content[:max_length]
 
         return {
@@ -330,6 +386,11 @@ def fetch_url(url: str, max_length: int = DEFAULT_MAX_LENGTH,
             'truncated': truncated,
             'start_index': start_index,
             'total_length': total_length,
+            # R2-6: New fields for pagination safety and observability
+            'max_start_index': MAX_START_INDEX,
+            'bytes_read': total_bytes_read,
+            'network_truncated': network_truncated,
+            'total_length_known': total_length_known,
         }
 
 

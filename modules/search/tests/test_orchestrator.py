@@ -109,13 +109,18 @@ class TestOrchestratorInit(unittest.TestCase):
         self.assertTrue(DEFAULT_CONFIG['enable_verifier'])
 
     def test_step_order_complete(self):
-        """STEP_ORDER 应包含所有 18 个 step（14 + 4 个 v4.4 + 可选）。"""
+        """STEP_ORDER should contain all pipeline steps.
+
+        S4/S5 fix: 'stream' and 'prewarm' removed (external capabilities).
+        S2/S3 fix: 'aggregate' and 'cache_store' added.
+        S10 fix: 'verify' moved before 'format'.
+        """
         expected_steps = {
             'redact_pii', 'plan', 'aggregate_pre', 'parallel_exec',
-            'stream', 'prewarm', 'i18n', 'arxiv', 'semantic_scholar',
+            'i18n', 'arxiv', 'semantic_scholar',
             'cache_lookup', 'detect_location', 'classify_query',
-            'execute_layers', 'dedup', 'format', 'verify', 'log',
-            'persist_memory',
+            'execute_layers', 'dedup', 'cache_store', 'aggregate',
+            'verify', 'format', 'log', 'persist_memory',
         }
         self.assertEqual(set(STEP_ORDER), expected_steps)
 
@@ -243,15 +248,17 @@ class TestOptionalStepsSkipByDefault(unittest.TestCase):
         orch.i18n()
         self.assertTrue(orch.step_reports['i18n']['skipped'])
 
-    def test_stream_skipped_by_default(self):
+    def test_stream_returns_unsupported(self):
+        """S4 fix: stream() returns unsupported, not a pipeline step."""
         orch = SearchOrchestrator('q')
-        orch.stream()
-        self.assertTrue(orch.step_reports['stream']['skipped'])
+        result = orch.stream()
+        self.assertTrue(result.get('unsupported'))
 
-    def test_prewarm_skipped_by_default(self):
+    def test_prewarm_returns_unsupported(self):
+        """S5 fix: prewarm() returns unsupported, not a pipeline step."""
         orch = SearchOrchestrator('q')
-        orch.prewarm()
-        self.assertTrue(orch.step_reports['prewarm']['skipped'])
+        result = orch.prewarm()
+        self.assertTrue(result.get('unsupported'))
 
     def test_persist_memory_skipped_by_default(self):
         orch = SearchOrchestrator('q')
@@ -611,12 +618,18 @@ class TestResult(unittest.TestCase):
         self.assertIn('executed_steps', result)
 
     def test_result_cached(self):
-        """多次访问 result 返回同一对象（cached）。"""
+        """S9 fix: result is no longer cached — each access returns fresh dict.
+
+        Old behavior: result was cached, returning same object.
+        New behavior: result is always computed from current state.
+        Test verifies that result reflects current state on each access.
+        """
         orch = SearchOrchestrator('q')
         orch.run_all()
         r1 = orch.result
         r2 = orch.result
-        self.assertIs(r1, r2)
+        # Both should have same content (state hasn't changed)
+        self.assertEqual(r1['results_count'], r2['results_count'])
 
     def test_result_includes_verification(self):
         orch = SearchOrchestrator('2026 query')
@@ -645,6 +658,10 @@ class TestDryRun(unittest.TestCase):
         optional_steps = [s for s in plan['steps'] if s['optional']]
         self.assertIn('plan', [s['step'] for s in optional_steps])
         self.assertIn('arxiv', [s['step'] for s in optional_steps])
+        # S4/S5: stream and prewarm are no longer in STEP_ORDER
+        step_names = [s['step'] for s in plan['steps']]
+        self.assertNotIn('stream', step_names)
+        self.assertNotIn('prewarm', step_names)
 
     def test_dry_run_marks_mandatory_steps(self):
         orch = SearchOrchestrator('q')

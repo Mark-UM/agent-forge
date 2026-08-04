@@ -9,7 +9,8 @@ version: 1.0.0
 `modules.delivery.checklist` contains all six category implementations in one
 file: engineering, resource, integration, i18n, test quality, and architecture.
 The integration category delegates to `modules.integration_check.checker`.
-There is no `modules/delivery/checks/` package.
+All six categories live in the single `checklist.py` module; there is no
+separate checks subpackage.
 
 ```powershell
 python -m modules.delivery.checklist --target <project-root>

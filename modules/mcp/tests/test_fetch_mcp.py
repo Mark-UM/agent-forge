@@ -154,18 +154,9 @@ def test_fetch_url_unsupported_scheme():
 
 def test_fetch_url_max_length_capped():
     """max_length > MAX_CONTENT_CAP should be clamped."""
-    with patch('urllib.request.urlopen') as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.geturl.return_value = 'https://example.com'
-        mock_resp.status = 200
-        mock_resp.headers.get.side_effect = lambda k, d='': {
-            'Content-Type': 'text/html; charset=utf-8',
-        }.get(k, d)
-        mock_resp.read.return_value = b'<html><body>x</body></html>'
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
+    body = b'<html><body>x</body></html>'
+    with patch('urllib.request.urlopen',
+               return_value=_make_mock_response(body)):
         result = fetch_url('https://example.com', max_length=999999)
         # MAX_CONTENT_CAP = 50000 — content much shorter so no truncation
         assert result['truncated'] is False
@@ -173,18 +164,9 @@ def test_fetch_url_max_length_capped():
 
 def test_fetch_url_max_length_zero_or_negative():
     """max_length <= 0 resets to DEFAULT_MAX_LENGTH."""
-    with patch('urllib.request.urlopen') as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.geturl.return_value = 'https://example.com'
-        mock_resp.status = 200
-        mock_resp.headers.get.side_effect = lambda k, d='': {
-            'Content-Type': 'text/html; charset=utf-8',
-        }.get(k, d)
-        mock_resp.read.return_value = b'<html><body>short</body></html>'
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
+    body = b'<html><body>short</body></html>'
+    with patch('urllib.request.urlopen',
+               return_value=_make_mock_response(body)):
         result = fetch_url('https://example.com', max_length=0)
         # Content should not be truncated (shorter than default 10000)
         assert result['truncated'] is False
@@ -195,13 +177,36 @@ def test_fetch_url_max_length_zero_or_negative():
 
 def _make_mock_response(body_bytes, content_type='text/html; charset=utf-8',
                         status=200, final_url='https://example.com'):
+    """Mock HTTP response.
+
+    V2 fix: fetch_mcp reads in 8KB chunks via resp.read(8192).
+    We model this with a side_effect that returns successive chunks
+    of body_bytes, then b'' on the following call (EOF).
+    """
     mock_resp = MagicMock()
     mock_resp.geturl.return_value = final_url
     mock_resp.status = status
     mock_resp.headers.get.side_effect = lambda k, d='': {
         'Content-Type': content_type,
     }.get(k, d)
-    mock_resp.read.return_value = body_bytes
+
+    # Simulate chunked reads: read(n) returns up to n bytes per call.
+    read_iter = [body_bytes] if body_bytes else [b'']
+
+    def _read_side_effect(size=-1):
+        if not read_iter:
+            return b''
+        chunk = read_iter.pop(0)
+        if size is None or size < 0:
+            return chunk
+        # Slice the chunk to the requested size; remainder stays for next call.
+        if len(chunk) <= size:
+            return chunk
+        head, tail = chunk[:size], chunk[size:]
+        read_iter.insert(0, tail)
+        return head
+
+    mock_resp.read.side_effect = _read_side_effect
     mock_resp.__enter__ = MagicMock(return_value=mock_resp)
     mock_resp.__exit__ = MagicMock(return_value=False)
     return mock_resp
@@ -389,3 +394,206 @@ def test_handle_unknown_method():
 def test_handle_invalid_request_not_dict():
     resp = fetch_mcp._handle_request("not a dict")
     assert resp['error']['code'] == -32600
+
+
+# ---------- V2 contract: chunked read with early stop ----------
+
+def test_v2_chunked_read_stops_at_byte_limit():
+    """V2: When the response exceeds the byte limit, reading stops early.
+
+    We mock read(8192) to return an endless stream of 'A' bytes.
+    fetch_url must stop reading once byte_limit is reached and set
+    truncated=True.
+    """
+    from modules.mcp.fetch_mcp import MAX_CONTENT_CAP
+
+    mock_resp = MagicMock()
+    mock_resp.geturl.return_value = 'https://example.com'
+    mock_resp.status = 200
+    mock_resp.headers.get.side_effect = lambda k, d='': {
+        'Content-Type': 'text/plain; charset=utf-8',
+    }.get(k, d)
+
+    # Endless stream: each read(n) returns n bytes of 'A'
+    def _endless_read(size=-1):
+        if size is None or size < 0:
+            return b'A' * 8192
+        return b'A' * size
+
+    mock_resp.read.side_effect = _endless_read
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch('urllib.request.urlopen', return_value=mock_resp):
+        result = fetch_url('https://example.com', max_length=500)
+        # Must be truncated because the stream is endless
+        assert result['truncated'] is True
+        # Content must be capped at max_length (after cap to MAX_CONTENT_CAP)
+        assert len(result['content']) <= MAX_CONTENT_CAP
+
+
+def test_v2_chunked_read_small_response_not_truncated():
+    """V2: A small response that fits within the byte limit is not truncated."""
+    body = b'hello world'
+    with patch('urllib.request.urlopen',
+               return_value=_make_mock_response(body, content_type='text/plain')):
+        result = fetch_url('https://example.com', max_length=1000)
+        assert result['truncated'] is False
+        assert result['content'] == 'hello world'
+
+
+def test_v2_chunked_read_preserves_total_length():
+    """V2: total_length reflects the decoded content length, not bytes read."""
+    body = 'A' * 1000
+    with patch('urllib.request.urlopen',
+               return_value=_make_mock_response(body.encode('utf-8'),
+                                                content_type='text/plain')):
+        result = fetch_url('https://example.com', max_length=10000)
+        assert result['total_length'] == 1000
+        assert result['truncated'] is False
+
+
+# ---------- R2-6 contract: pagination safety and observability ----------
+
+def test_r26_new_fields_present_in_return():
+    """R2-6: fetch_url must return max_start_index, bytes_read, network_truncated, total_length_known."""
+    body = b'hello world'
+    with patch('urllib.request.urlopen',
+               return_value=_make_mock_response(body, content_type='text/plain')):
+        result = fetch_url('https://example.com', max_length=1000)
+    assert 'max_start_index' in result
+    assert 'bytes_read' in result
+    assert 'network_truncated' in result
+    assert 'total_length_known' in result
+    assert result['max_start_index'] > 0
+    assert result['bytes_read'] == len(body)
+    assert result['network_truncated'] is False
+    # Mock response has no Content-Length header → unknown
+    assert result['total_length_known'] is False
+
+
+def test_r26_start_index_exceeding_max_raises():
+    """R2-6: start_index exceeding MAX_START_INDEX must raise ValueError."""
+    from modules.mcp.fetch_mcp import MAX_START_INDEX
+    with pytest.raises(ValueError, match='exceeds MAX_START_INDEX'):
+        fetch_url('https://example.com', start_index=MAX_START_INDEX + 1)
+
+
+def test_r26_negative_start_index_raises():
+    """R2-6: Negative start_index must raise ValueError."""
+    with pytest.raises(ValueError, match='must be >= 0'):
+        fetch_url('https://example.com', start_index=-1)
+
+
+def test_r26_network_truncated_on_large_response():
+    """R2-6: network_truncated must be True when byte_limit is hit."""
+    # Endless stream mock
+    mock_resp = MagicMock()
+    mock_resp.geturl.return_value = 'https://example.com'
+    mock_resp.status = 200
+    mock_resp.headers.get.side_effect = lambda k, d='': {
+        'Content-Type': 'text/plain',
+    }.get(k, d)
+
+    def _endless_read(size=-1):
+        return b'A' * 8192
+
+    mock_resp.read.side_effect = _endless_read
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch('urllib.request.urlopen', return_value=mock_resp):
+        result = fetch_url('https://example.com', max_length=500)
+    assert result['network_truncated'] is True
+    assert result['truncated'] is True
+    assert result['bytes_read'] > 0
+
+
+def test_r26_total_length_known_when_content_length_present():
+    """R2-6: total_length_known must be True when Content-Length header is valid."""
+    body = b'hello world'
+    mock_resp = MagicMock()
+    mock_resp.geturl.return_value = 'https://example.com'
+    mock_resp.status = 200
+    mock_resp.headers.get.side_effect = lambda k, d='': {
+        'Content-Type': 'text/plain',
+        'Content-Length': str(len(body)),
+    }.get(k, d)
+
+    read_iter = [body]
+
+    def _read_side_effect(size=-1):
+        if not read_iter:
+            return b''
+        chunk = read_iter.pop(0)
+        if len(chunk) > size > 0:
+            read_iter.insert(0, chunk[size:])
+            return chunk[:size]
+        return chunk
+
+    mock_resp.read.side_effect = _read_side_effect
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch('urllib.request.urlopen', return_value=mock_resp):
+        result = fetch_url('https://example.com', max_length=1000)
+    assert result['total_length_known'] is True
+    assert result['network_truncated'] is False
+
+
+def test_r26_total_length_unknown_when_content_length_empty():
+    """R2-6: total_length_known must be False when Content-Length header is empty/invalid."""
+    body = b'hello'
+    mock_resp = MagicMock()
+    mock_resp.geturl.return_value = 'https://example.com'
+    mock_resp.status = 200
+    mock_resp.headers.get.side_effect = lambda k, d='': {
+        'Content-Type': 'text/plain',
+        'Content-Length': '',  # empty string
+    }.get(k, d)
+
+    read_iter = [body]
+
+    def _read_side_effect(size=-1):
+        if not read_iter:
+            return b''
+        chunk = read_iter.pop(0)
+        if len(chunk) > size > 0:
+            read_iter.insert(0, chunk[size:])
+            return chunk[:size]
+        return chunk
+
+    mock_resp.read.side_effect = _read_side_effect
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch('urllib.request.urlopen', return_value=mock_resp):
+        result = fetch_url('https://example.com', max_length=1000)
+    assert result['total_length_known'] is False
+
+
+def test_r26_byte_limit_capped_by_max_network_bytes():
+    """R2-6: byte_limit must not exceed MAX_NETWORK_BYTES even with large start_index."""
+    from modules.mcp.fetch_mcp import MAX_NETWORK_BYTES
+    # With a large start_index, byte_limit would be huge without the cap.
+    # Verify that bytes_read never exceeds MAX_NETWORK_BYTES + one chunk (8192).
+    mock_resp = MagicMock()
+    mock_resp.geturl.return_value = 'https://example.com'
+    mock_resp.status = 200
+    mock_resp.headers.get.side_effect = lambda k, d='': {
+        'Content-Type': 'text/plain',
+    }.get(k, d)
+
+    def _endless_read(size=-1):
+        return b'A' * 8192
+
+    mock_resp.read.side_effect = _endless_read
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch('urllib.request.urlopen', return_value=mock_resp):
+        result = fetch_url('https://example.com', max_length=50000,
+                           start_index=100000)
+    # bytes_read must be bounded by MAX_NETWORK_BYTES + one 8KB chunk
+    assert result['bytes_read'] <= MAX_NETWORK_BYTES + 8192
+    assert result['network_truncated'] is True

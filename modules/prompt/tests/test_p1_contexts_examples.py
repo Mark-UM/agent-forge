@@ -131,14 +131,16 @@ def test_compose_full_stack():
     assert any("contexts/python.md" in s for s in result["sources"])
     assert any("examples/python/test-driven.md" in s for s in result["sources"])
 
-    # Section headers present in correct order
+    # Section headers present in correct order (P4: priority ladder order)
+    # BASE → TASK → CONTEXT → PROFILE → EXAMPLE
     prompt = result["prompt"]
-    base_idx = prompt.find("BASE")
-    profile_idx = prompt.find("PROFILE: default")
-    task_idx = prompt.find("TASK: coding")
-    ctx_idx = prompt.find("CONTEXT: python")
-    ex_idx = prompt.find("EXAMPLE: python/test-driven")
-    assert base_idx < profile_idx < task_idx < ctx_idx < ex_idx
+    # Find the section headers (not the priority declaration mentions)
+    base_idx = prompt.find("# === BASE")
+    task_idx = prompt.find("# === TASK: coding")
+    ctx_idx = prompt.find("# === CONTEXT: python")
+    profile_idx = prompt.find("# === PROFILE: default")
+    ex_idx = prompt.find("# === EXAMPLE: python/test-driven")
+    assert base_idx < task_idx < ctx_idx < profile_idx < ex_idx
 
 
 # ---------- context detection integration ----------

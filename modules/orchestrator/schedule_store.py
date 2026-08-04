@@ -131,15 +131,29 @@ def add_schedule(
         description: Optional description
         priority: One of VALID_PRIORITIES (default: medium)
         source_ref: Reference to source (e.g., report path)
-        recurrence: Cron expression for recurring tasks (empty = one-shot)
+        recurrence: SC2 fix: UNSUPPORTED for action items. Non-empty values
+            are rejected. Recurring jobs should use the scheduler_jobs table
+            via job_store.add_job() instead. The parameter is kept for
+            backward compatibility but must be empty.
 
     Returns:
         str: The generated schedule ID (uuid4)
+
+    Raises:
+        ValueError: If recurrence is non-empty (SC2: unsupported for action items)
     """
     if not title or not title.strip():
         raise ValueError("title is required")
     if not due_at or not due_at.strip():
         raise ValueError("due_at is required")
+
+    # SC2 fix: recurrence is not supported for action items (schedules table).
+    # Recurring jobs should use scheduler_jobs table via job_store.add_job().
+    if recurrence and recurrence.strip():
+        raise ValueError(
+            "recurrence is not supported for action items (SC2 fix). "
+            "Use job_store.add_job() for recurring cron jobs instead."
+        )
 
     _validate_priority(priority)
     _validate_source(source)

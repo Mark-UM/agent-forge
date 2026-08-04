@@ -186,3 +186,79 @@ def test_handle_unknown_method():
 def test_handle_invalid_request_not_dict():
     resp = time_mcp._handle_request("not a dict")
     assert resp['error']['code'] == -32600
+
+
+# ---------- V3 contract: aware datetime handling ----------
+
+def test_v3_aware_input_offset_not_overwritten():
+    """V3: Input with +08:00 must not be overwritten by replace(tzinfo=...).
+
+    '2026-07-20T10:00:00+08:00' with source_timezone='UTC' must preserve
+    the time point (10:00+08:00 = 02:00 UTC = 10:00 Shanghai). The source
+    field is represented in source_timezone (UTC → 02:00+00:00), but the
+    time point itself is not shifted. The target in Shanghai should be
+    10:00+08:00, proving no information was lost.
+    """
+    result = time_mcp.convert_time(
+        '2026-07-20T10:00:00+08:00', 'UTC', 'Asia/Shanghai'
+    )
+    # Source is represented in source_timezone (UTC): 10:00+08:00 → 02:00+00:00
+    assert result['source']['utc_offset'] == '+00:00'
+    assert 'T02:00:00' in result['source']['datetime']
+    # Target in Shanghai: 02:00 UTC → 10:00+08:00 (time point preserved)
+    assert 'T10:00:00+08:00' in result['target']['datetime']
+
+
+def test_v3_aware_input_z_suffix():
+    """V3: 'Z' suffix is treated as UTC offset, not naive."""
+    result = time_mcp.convert_time(
+        '2026-07-20T10:00:00Z', 'Asia/Shanghai', 'Asia/Shanghai'
+    )
+    # Z = UTC, so source is 10:00 UTC = 18:00 Shanghai
+    assert 'T18:00:00+08:00' in result['target']['datetime']
+
+
+def test_v3_naive_input_uses_source_timezone():
+    """V3: Naive input is interpreted in source_timezone (existing behavior)."""
+    result = time_mcp.convert_time(
+        '2026-07-20T10:00:00', 'Asia/Shanghai', 'UTC'
+    )
+    # 10:00 Shanghai = 02:00 UTC
+    assert 'T02:00:00+00:00' in result['target']['datetime']
+
+
+def test_v3_aware_input_cross_timezone():
+    """V3: Aware input converts correctly across timezones."""
+    result = time_mcp.convert_time(
+        '2026-07-20T10:00:00+08:00', 'UTC', 'America/New_York'
+    )
+    # 10:00+08:00 = 02:00 UTC = 22:00-04:00 (EDT, July) previous day in NY
+    tgt = result['target']['datetime']
+    assert '-04:00' in tgt or '-05:00' in tgt
+    # Verify the conversion is correct: 10:00+08:00 → 02:00Z → 22:00-04:00
+    assert 'T22:00:00' in tgt or 'T21:00:00' in tgt
+
+
+def test_v3_dst_gap_emits_warning():
+    """V3: A naive time in the DST gap (spring forward) emits a warning.
+
+    In America/New_York, 2026-03-08 02:30 is in the DST gap
+    (clocks jump 02:00→03:00). Python shifts it, and we warn.
+    """
+    import warnings
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        time_mcp.convert_time(
+            '2026-03-08T02:30:00', 'America/New_York', 'UTC'
+        )
+    # At least one UserWarning about DST gap
+    gap_warnings = [w for w in caught if 'DST gap' in str(w.message)]
+    assert len(gap_warnings) >= 1
+
+
+def test_v3_invalid_iana_timezone_rejected():
+    """V3: Invalid IANA timezone raises ValueError."""
+    with pytest.raises(ValueError, match='Unknown timezone'):
+        time_mcp.convert_time(
+            '2026-07-20T10:00:00', 'NotAReal/Zone', 'UTC'
+        )

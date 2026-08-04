@@ -356,7 +356,7 @@ class TestComposerIntegration:
         content = composer.load_prompt(path)
         assert content  # non-empty
         assert "Anti-Pattern Blacklist" in content
-        assert "Engineering Anti-patterns" in content
+        assert "Implementation Anti-patterns" in content
 
     def test_load_naming_contract_prompt(self):
         """composer should be able to load naming-contract.md."""

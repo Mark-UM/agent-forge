@@ -69,10 +69,13 @@ tasks/TODO lines and writes an ignored report without modifying source Memory.
 ## Scheduler
 
 Start timed jobs with `python -m modules.scheduler.daemon`. The service binds
-`127.0.0.1:9225` and persists `_runtime/scheduler/jobs.json`. Supported jobs are
+`127.0.0.1:9225` and persists state to `_runtime/mcp-sqlite.db`
+(SQLite). The legacy `jobs.json` file is migrated idempotently on startup with
+a timestamped backup; no new writes go to `jobs.json`. Supported jobs are
 file reindex, report collection, Memory review, action extraction, and exact
 whitelist custom calls. If APScheduler is unavailable, creation is refused; no
-false-active job is saved.
+false-active job is saved. The HTTP server uses `ThreadingHTTPServer` to
+prevent long-running jobs from blocking status queries.
 
 ## Privacy and troubleshooting
 

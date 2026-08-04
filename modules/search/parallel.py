@@ -89,6 +89,8 @@ def _empty_result(mode, errors=None):
         'timings': {},
         'errors': errors or {},
         'cancelled': [],
+        # S11: 仍在线程池中运行、未完成且未被 cancel 的任务（非强制终止，仅放弃等待）
+        'abandoned': [],
     }
 
 
@@ -136,10 +138,12 @@ def parallel_search(query, layers, mcp_callers, mode='first_completed',
             'mode': str,                # 'first_completed' | 'all'
             'winner': str | None,      # 首个成功的层名
             'results': list[dict],      # 结果列表
-            'all_completed': bool,      # 所有层是否都完成（无超时/取消）
+            'all_completed': bool,      # 所有层是否都完成（无超时/取消/放弃）
             'timings': dict[layer, float],  # 各层耗时（秒）
             'errors': dict[layer, str],     # 各层错误信息（失败时）
-            'cancelled': list[str],     # 被取消的层名列表
+            'cancelled': list[str],     # 被 cancel 成功的层名列表
+            'abandoned': list[str],     # S11: 仍在运行、未完成且无法 cancel 的层名
+                                         # （线程未被强制终止，只是不再等待结果）
         }
     """
     # 参数校验
@@ -182,6 +186,7 @@ def parallel_search(query, layers, mcp_callers, mode='first_completed',
                 'timings': timings,
                 'errors': {},
                 'cancelled': [],
+                'abandoned': [],
             }
         else:
             errors[layer] = outcome['error']
@@ -194,18 +199,25 @@ def parallel_search(query, layers, mcp_callers, mode='first_completed',
                 'timings': timings,
                 'errors': errors,
                 'cancelled': [],
+                'abandoned': [],
             }
 
     # 多层并行
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(valid_layers))) as executor:
-        future_to_layer = {
-            executor.submit(_timed_call, layer, mcp_callers[layer], query): layer
-            for layer in valid_layers
-        }
+    # S11 fix: 不再用 `with ThreadPoolExecutor(...)` 上下文管理器。
+    # 该模式在退出时会等待所有已提交任务完成，导致 timeout 不是硬截止。
+    # 改为显式创建 executor，拿到 winner 或 timeout 后立即 shutdown(wait=False, cancel_futures=True)，
+    # 仍在运行的任务标记为 'abandoned'（线程未被强制终止，只是不再等待）。
+    executor = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(valid_layers)))
+    future_to_layer = {
+        executor.submit(_timed_call, layer, mcp_callers[layer], query): layer
+        for layer in valid_layers
+    }
 
-        winner = None
-        winner_results = []
+    winner = None
+    winner_results = []
+    abandoned = []  # S11: 仍在运行、未被 cancel 成功的任务
 
+    try:
         if mode == 'first_completed':
             try:
                 for fut in as_completed(future_to_layer.keys(), timeout=timeout):
@@ -219,57 +231,40 @@ def parallel_search(query, layers, mcp_callers, mode='first_completed',
                         if winner is None:
                             winner = layer
                             winner_results = outcome['results']
-                            # 取消其他 pending 任务
-                            for other_fut in future_to_layer:
-                                if other_fut is not fut and not other_fut.done():
-                                    other_layer = future_to_layer[other_fut]
-                                    if other_fut.cancel():
-                                        cancelled.append(other_layer)
-                                    else:
-                                        # 已开始执行，无法取消，等待快速完成
-                                        try:
-                                            other_outcome = other_fut.result(timeout=0.5)
-                                            timings[other_layer] = other_outcome['elapsed']
-                                            if other_outcome['success']:
-                                                results_by_layer[other_layer] = other_outcome['results']
-                                                completed_order.append(other_layer)
-                                            else:
-                                                errors[other_layer] = other_outcome['error']
-                                        except Exception as e:
-                                            errors[other_layer] = str(e)[:200]
-                            break  # 拿到 winner，退出循环
+                            # 拿到 winner，不再等待其他任务
+                            break
                     else:
                         errors[layer] = outcome['error']
             except FuturesTimeoutError:
-                # 超时，取消所有未完成的
+                # 超时：取消所有未完成任务，无法 cancel 的标记为 abandoned
                 for fut in future_to_layer:
                     if not fut.done():
                         layer = future_to_layer[fut]
                         if fut.cancel():
                             cancelled.append(layer)
                         else:
-                            try:
-                                outcome = fut.result(timeout=0.5)
-                                timings[layer] = outcome['elapsed']
-                                if outcome['success']:
-                                    results_by_layer[layer] = outcome['results']
-                                    if winner is None:
-                                        winner = layer
-                                        winner_results = outcome['results']
-                                else:
-                                    errors[layer] = outcome['error']
-                            except Exception as e:
-                                errors[layer] = str(e)[:200]
+                            abandoned.append(layer)
+
+            # S11: 拿到 winner 或 timeout 后，仍可能有任务在运行。
+            # 标记这些为 abandoned（不等待完成，也不声称强制终止）。
+            for fut in future_to_layer:
+                layer = future_to_layer[fut]
+                if not fut.done() and layer not in cancelled and layer not in abandoned:
+                    if fut.cancel():
+                        cancelled.append(layer)
+                    else:
+                        abandoned.append(layer)
 
             return {
                 'success': winner is not None,
                 'mode': mode,
                 'winner': winner,
                 'results': winner_results,
-                'all_completed': len(cancelled) == 0 and not errors,
+                'all_completed': len(cancelled) == 0 and not errors and not abandoned,
                 'timings': timings,
                 'errors': errors,
                 'cancelled': cancelled,
+                'abandoned': abandoned,
             }
 
         else:  # mode == 'all'
@@ -289,6 +284,8 @@ def parallel_search(query, layers, mcp_callers, mode='first_completed',
                         layer = future_to_layer[fut]
                         if fut.cancel():
                             cancelled.append(layer)
+                        else:
+                            abandoned.append(layer)
 
             # 合并结果（按 valid_layers 顺序，去重由调用方处理）
             merged = []
@@ -301,11 +298,16 @@ def parallel_search(query, layers, mcp_callers, mode='first_completed',
                 'mode': mode,
                 'winner': completed_order[-1] if completed_order else None,
                 'results': merged,
-                'all_completed': len(cancelled) == 0,
+                'all_completed': len(cancelled) == 0 and not abandoned,
                 'timings': timings,
                 'errors': errors,
                 'cancelled': cancelled,
+                'abandoned': abandoned,
             }
+    finally:
+        # S11: 立即放弃等待仍运行的任务（非强制终止线程，只是不再阻塞）。
+        # cancel_futures=True 尝试 cancel 所有 pending futures；已运行的会继续到完成但被忽略。
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 # ── CLI 接口 ────────────────────────────────────────────────────

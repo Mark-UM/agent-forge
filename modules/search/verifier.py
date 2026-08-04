@@ -289,21 +289,23 @@ def verify_against_authority(query, results, fetch_callback=None):
         report['cross_check'] = cross_check
 
         # Step 5: 判定 verified
-        # 验证通过的判定标准：
-        # - 至少 1 个 L1 抓取成功
-        # - cross_check 一致性 ≥ 0.5（query 关键词在 L1 内容中命中率）
+        # S13 fix: keyword overlap 是词汇一致性，不是事实验证。
+        # 旧阈值 0.5 太宽松，会将"关键词重合"误判为"已验证"。
+        # 新阈值 0.8 更严格：只有强一致性才标记 verified=True。
+        # 同时新增 lexical_consistency / source_overlap / verification_strength
+        # 字段在 cross_check 中，供消费者区分"词汇一致"与"事实验证"。
         successful_fetches = [f for f in fetched_l1 if f['status'] == 'success']
         if not successful_fetches:
             report['verified'] = False
             report['warnings'].append('all L1 fetches failed')
         else:
             consistency = cross_check.get('consistency_score', 0.0)
-            if consistency >= 0.5:
+            if consistency >= 0.8:
                 report['verified'] = True
             else:
                 report['verified'] = False
                 report['warnings'].append(
-                    f'cross-check consistency {consistency:.2f} < 0.5 threshold'
+                    f'cross-check consistency {consistency:.2f} < 0.8 threshold'
                 )
 
         return report
@@ -448,6 +450,15 @@ def _cross_check_results(query, results, fetched_l1):
 
     一致性评分 = (L1 内容中命中的 query 关键词数) / (query 关键词总数)
 
+    S13 fix: keyword overlap 是词汇一致性，不是事实验证。
+    - lexical_consistency: 原始一致性分数（0.0-1.0），与 consistency_score 同值
+    - source_overlap: 内容覆盖至少一个 query 关键词的 L1 URL 列表
+    - verification_strength: 'none' | 'weak' | 'moderate' | 'strong'
+      - 'none': 无 L1 成功抓取或无 query 关键词
+      - 'weak': consistency < 0.3
+      - 'moderate': 0.3 <= consistency < 0.8
+      - 'strong': consistency >= 0.8
+
     Args:
         query: 用户查询
         results: 搜索结果（仅用于提取关键词上下文）
@@ -460,24 +471,32 @@ def _cross_check_results(query, results, fetched_l1):
             'matched_keywords': list[str],
             'missed_keywords': list[str],
             'l1_url_covered': list[str],
+            'lexical_consistency': float [0.0, 1.0],  # S13
+            'source_overlap': list[str],                # S13
+            'verification_strength': str,                # S13
         }
     """
     # 提取 query 关键词
     query_keywords = _extract_keywords(query)
 
-    if not query_keywords or not fetched_l1:
+    # S13: 无关键词或无抓取结果 → verification_strength='none'
+    successful_fetches = [f for f in fetched_l1
+                          if isinstance(f, dict) and f.get('status') == 'success']
+    if not query_keywords or not fetched_l1 or not successful_fetches:
         return {
             'consistency_score': 0.0,
             'query_keywords': query_keywords,
             'matched_keywords': [],
             'missed_keywords': query_keywords,
             'l1_url_covered': [],
+            'lexical_consistency': 0.0,
+            'source_overlap': [],
+            'verification_strength': 'none',
         }
 
     # 合并所有 L1 内容
     l1_text = ' '.join(
-        f.get('content_snippet', '') for f in fetched_l1
-        if f.get('status') == 'success'
+        f.get('content_snippet', '') for f in successful_fetches
     ).lower()
 
     if not l1_text:
@@ -487,6 +506,9 @@ def _cross_check_results(query, results, fetched_l1):
             'matched_keywords': [],
             'missed_keywords': query_keywords,
             'l1_url_covered': [],
+            'lexical_consistency': 0.0,
+            'source_overlap': [],
+            'verification_strength': 'none',
         }
 
     # 计算命中率
@@ -500,13 +522,30 @@ def _cross_check_results(query, results, fetched_l1):
 
     consistency = len(matched) / len(query_keywords)
 
+    # S13: source_overlap — 内容覆盖至少一个 query 关键词的 L1 URL
+    source_overlap = []
+    for f in successful_fetches:
+        snippet = f.get('content_snippet', '').lower()
+        if any(kw.lower() in snippet for kw in query_keywords):
+            source_overlap.append(f['url'])
+
+    # S13: verification_strength 分级
+    if consistency < 0.3:
+        strength = 'weak'
+    elif consistency < 0.8:
+        strength = 'moderate'
+    else:
+        strength = 'strong'
+
     return {
         'consistency_score': round(consistency, 4),
         'query_keywords': query_keywords,
         'matched_keywords': matched,
         'missed_keywords': missed,
-        'l1_url_covered': [f['url'] for f in fetched_l1
-                           if f.get('status') == 'success'],
+        'l1_url_covered': [f['url'] for f in successful_fetches],
+        'lexical_consistency': round(consistency, 4),
+        'source_overlap': source_overlap,
+        'verification_strength': strength,
     }
 
 

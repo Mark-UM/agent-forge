@@ -62,6 +62,7 @@ FLASH_ALLOWED_TASKS = frozenset({
     "i18n",                  # translation (modules/search/i18n.py)
     "summarize",             # URL summarization (modules/search/summarize.py)
     "aggregator",            # result synthesis (modules/search/aggregator.py — has fallback)
+    "action_extraction",     # extract action items from markdown (modules/orchestrator/action_extractor.py)
     # Review tasks (Flash as REVIEWER — its core strength per source doc)
     "review_code",           # 3-stage review: code (agents/review-code.md)
     "review_structure",      # 3-stage review: structure (agents/review-structure.md)

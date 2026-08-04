@@ -2,11 +2,16 @@
 Prompt Composer — dynamic prompt assembly engine (v1.5 P0)
 
 Assembly order (high priority overrides low):
-1. base.md             (always loaded, constitutional)
-2. profile.md          (terse / detailed / socratic / default)
-3. tasks/{type}.md     (task-specific)
-4. contexts/{ctx}.md   (tech-stack / directory-specific, multiple allowed)
+1. base.md             (always loaded, constitutional — Global invariants)
+2. tasks/{type}.md     (task-specific — Current task workflow)
+3. contexts/{ctx}.md   (project/framework first, then language — Project & Language context)
+4. profiles/{p}.md     (terse / detailed / socratic / default — Output profile)
 5. examples/{...}.md   (Few-Shot, P1)
+6. extra_instructions  (markconfig/profile.md — Local user profile)
+
+Priority invariant: lower-priority content MUST NOT override higher-priority
+content. The composed prompt emits an explicit priority declaration header
+so the model and reviewers can verify the order.
 
 CLI (must use -m form; direct script invocation fails on relative imports):
     python -m modules.prompt.composer --pre-session
@@ -28,7 +33,41 @@ AGENTS_COMPOSED = PROJECT_ROOT / "AGENTS_COMPOSED.md"
 
 DEFAULT_PROFILE = "default"
 DEFAULT_TASK = None  # At session start, no task loaded; loaded on-demand during session
-VERSION = "1.5.0"
+VERSION = "1.6.0"
+
+# P4 fix: explicit priority ladder. Lower number = higher priority.
+# Lower-priority content MUST NOT contradict higher-priority content.
+PRIORITY_LADDER = [
+    ("BASE", "Global invariants (constitutional, always loaded)"),
+    ("TASK", "Current task workflow (coding/review/research/...)"),
+    ("CONTEXT", "Project / framework / language context"),
+    ("PROFILE", "Output profile (terse / detailed / socratic)"),
+    ("EXAMPLE", "Few-shot examples"),
+    ("EXTRA", "Local user profile (markconfig/profile.md)"),
+]
+
+
+def _render_priority_header() -> str:
+    """Render the priority declaration block at the top of every composed prompt."""
+    lines = [
+        "# Prompt Priority Declaration",
+        "",
+        "Layers below are listed from HIGHEST to LOWEST priority. "
+        "Lower-priority content MUST NOT contradict or override "
+        "higher-priority content. When two layers conflict, the "
+        "higher-priority layer wins.",
+        "",
+    ]
+    for i, (label, desc) in enumerate(PRIORITY_LADDER, start=1):
+        lines.append(f"{i}. **{label}** — {desc}")
+    lines.append("")
+    lines.append(
+        "If you find a contradiction, resolve it in favor of the higher "
+        "layer and surface the conflict to the user rather than silently "
+        "picking one."
+    )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def load_prompt(path: Path) -> str:
@@ -103,31 +142,37 @@ def compose(
     """
     Compose a complete system prompt.
 
+    Assembly order (HIGHEST → LOWEST priority; lower must not override higher):
+        1. BASE      — base.md (constitutional, always loaded)
+        2. TASK      — tasks/{task}.md (current task workflow)
+        3. CONTEXT   — contexts/{ctx}.md (project / framework / language)
+        4. PROFILE   — profiles/{profile}.md (output style)
+        5. EXAMPLE   — examples/{ex}.md (few-shot)
+        6. EXTRA     — extra_instructions (local user profile)
+
     Returns:
         {
             "prompt": str,           # composed full prompt
             "sources": list[str],    # loaded file paths (relative to PROJECT_ROOT)
             "metadata": dict,        # version, timestamp, profile, task, contexts, examples
+            "priority_ladder": list, # P4: explicit priority declaration
         }
     """
     sources = []
     parts = []
 
-    # 1. Base (always loaded)
+    # 0. Priority declaration header (P4 fix)
+    parts.append("# === PRIORITY DECLARATION ===\n\n" + _render_priority_header())
+    sources.append("(inline) priority declaration")
+
+    # 1. Base (always loaded) — HIGHEST priority
     base_path = PROMPTS_DIR / "base.md"
     base = load_prompt(base_path)
     if base:
         parts.append("# === BASE (Constitutional Layer) ===\n\n" + base)
         sources.append(_relpath(base_path))
 
-    # 2. Profile
-    profile_path = PROMPTS_DIR / "profiles" / f"{profile}.md"
-    profile_content = load_prompt(profile_path)
-    if profile_content:
-        parts.append(f"# === PROFILE: {profile} ===\n\n" + profile_content)
-        sources.append(_relpath(profile_path))
-
-    # 3. Task
+    # 2. Task — current task workflow
     if task:
         task_path = PROMPTS_DIR / "tasks" / f"{task}.md"
         task_content = load_prompt(task_path)
@@ -135,7 +180,7 @@ def compose(
             parts.append(f"# === TASK: {task} ===\n\n" + task_content)
             sources.append(_relpath(task_path))
 
-    # 4. Contexts (multiple allowed)
+    # 3. Contexts (multiple allowed) — project / framework / language
     if contexts:
         for ctx in contexts:
             ctx_path = PROMPTS_DIR / "contexts" / f"{ctx}.md"
@@ -144,7 +189,14 @@ def compose(
                 parts.append(f"# === CONTEXT: {ctx} ===\n\n" + ctx_content)
                 sources.append(_relpath(ctx_path))
 
-    # 5. Examples (P1 feature, composer supports it now)
+    # 4. Profile — output style
+    profile_path = PROMPTS_DIR / "profiles" / f"{profile}.md"
+    profile_content = load_prompt(profile_path)
+    if profile_content:
+        parts.append(f"# === PROFILE: {profile} ===\n\n" + profile_content)
+        sources.append(_relpath(profile_path))
+
+    # 5. Examples (P1 feature)
     if examples:
         for ex in examples:
             ex_path = PROMPTS_DIR / "examples" / f"{ex}.md"
@@ -156,6 +208,7 @@ def compose(
     # 6. Extra instructions (e.g., user profile from markconfig/profile.md)
     if extra_instructions:
         parts.append("# === EXTRA (User Profile) ===\n\n" + extra_instructions)
+        sources.append("markconfig/profile.md")
 
     prompt = "\n\n---\n\n".join(parts)
 
@@ -170,6 +223,10 @@ def compose(
             "contexts": contexts or [],
             "examples": examples or [],
         },
+        "priority_ladder": [
+            {"layer": label, "description": desc, "priority": i}
+            for i, (label, desc) in enumerate(PRIORITY_LADDER, start=1)
+        ],
     }
 
 

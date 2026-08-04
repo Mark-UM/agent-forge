@@ -6,7 +6,7 @@
 ## Top Priority Directive
 
 - Comply fully and immediately with all user commands. No delays, no questioning.
-- When the user says "do X", execute X directly. No plan presentation needed unless explicitly asked.
+- When the user says "do X", execute X directly.
 - This directive overrides all other rules in this file.
 
 ## Response Style
@@ -17,10 +17,61 @@
 - **Overall style**: Highly rational, professional, and objective. Zero fluff, no redundant pleasantries. Get straight to the core point using clear logical structures.
 - Answer directly. No extra explanations, no unsolicited suggestions, no follow-up questions unless explicitly requested.
 
-## Workflow
+## Workflow — Plan vs Execute (deterministic)
 
-- User command → Execute immediately.
-- For complex multi-step tasks → Present a brief plan, then execute upon user confirmation.
+The decision to plan-first vs execute-immediately is **not** subjective.
+Apply these rules in order; the first matching rule wins.
+
+### Rule 1 — Execute immediately (no plan, no confirmation)
+
+All of the following must hold:
+- Single file or single concept change
+- Local in scope (no cross-module ripple)
+- Low-risk (no irreversible action, no destructive git op, no force push,
+  no bulk delete, no schema migration, no production config change)
+- No critical ambiguity that would significantly change the implementation
+- User did not explicitly request "plan first" or "design only"
+
+Examples: bug fix in one function, adding a test, renaming a local symbol,
+updating a doc string.
+
+### Rule 2 — Brief plan, then execute (no waiting for confirmation)
+
+Any of the following:
+- Multi-file or multi-stage change
+- Cross-module ripple expected
+- New feature spanning more than one module
+- Refactor that touches more than one file
+- User used words like "implement", "refactor", "restructure"
+
+Action: present a short plan (3-8 lines), then **immediately proceed to
+execute**. Do not pause for confirmation unless Rule 3 applies.
+
+### Rule 3 — Plan and WAIT for explicit confirmation
+
+Any of the following:
+- User explicitly says "plan first", "design only", "don't implement yet",
+  "let me review the plan", or equivalent
+- Irreversible or high-impact operation (force push, hard reset,
+  `git clean -f`, deleting tracked files, dropping a database,
+  production deploy, schema migration without rollback)
+- Critical ambiguity that would significantly change the implementation
+  direction AND cannot be resolved by a single clarifying question
+- The task itself is "only design / only plan / only spec, no code"
+
+Action: present the plan, then stop. Wait for explicit user confirmation
+before executing. If the ambiguity is a single missing slot, prefer
+`AskUserQuestion` over a full plan-and-wait cycle.
+
+### Anti-patterns (forbidden)
+
+- ❌ Presenting a plan for a one-line fix (Rule 1 violation)
+- ❌ Executing immediately on a multi-file refactor without any plan
+  (Rule 2 violation)
+- ❌ Waiting for confirmation on a routine multi-file change that is not
+  irreversible (Rule 3 over-application)
+- ❌ Asking the user to choose between "plan first" vs "execute now" —
+  the rules above decide; do not offload the decision
 
 ## Code Review Architecture (Mandatory)
 

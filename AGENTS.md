@@ -13,8 +13,11 @@
 ## Top Priority Directive
 
 - Comply fully and immediately with all user commands. No delays, no questioning.
-- When the user says "do X", execute X directly. No plan presentation needed unless explicitly asked.
+- When the user says "do X", execute X directly.
 - This directive overrides all other rules in this file.
+- Plan-vs-execute behavior is governed by the deterministic rules in
+  `AGENTS_BASE.md` § "Workflow — Plan vs Execute". Do not duplicate or
+  contradict those rules here.
 
 ## Task Routing (v1.5)
 
@@ -38,7 +41,11 @@ Rules:
 
 ## Context Awareness (v1.5)
 
-When modifying files, detect context and load corresponding context prompt:
+When modifying files, detect context and load corresponding context prompt.
+**Triggers must be based on real signals** (file path, imports, package.json
+deps, marker files) — never on "any code language detected".
+
+### Language contexts
 
 | File pattern | Read |
 |--------------|------|
@@ -47,11 +54,27 @@ When modifying files, detect context and load corresponding context prompt:
 | `.hs` files | `.opencode/prompts/contexts/haskell.md` |
 | `.java` files | `.opencode/prompts/contexts/java.md` |
 | `.cpp` / `.h` files | `.opencode/prompts/contexts/cpp.md` |
+
+### Domain / project contexts (load only when triggered)
+
+| Trigger | Read |
+|---------|------|
+| UI file path matches `src/ui/**`, `src/components/**`, `src/panels/**` | `.opencode/prompts/contexts/ui-components.md` |
+| `package.json` contains `"three"` dependency, OR any file imports from `"three"` | `.opencode/prompts/contexts/threejs-game-loop.md` |
+| Project root contains `.tower-stack` marker, OR `package.json` `name` = `"tower-stack-3d"`, OR file path matches `src/game/Tower*` | `.opencode/prompts/contexts/tower-stack-project.md` |
 | `markconfig/` files | `.opencode/prompts/contexts/secrets.md` |
 | `_data/memory/` files | `.opencode/prompts/contexts/memory.md` |
 | Long sessions (≥50 turns) | `.opencode/prompts/contexts/long-session.md` |
 
-Context prompts augment the base prompt with language-specific conventions, security rules, and session-awareness.
+### Always-on contexts
+
+| Trigger | Read |
+|---------|------|
+| Any code language detected | `.opencode/prompts/contexts/anti-patterns.md` (cross-language rules only) |
+
+Context prompts augment the base prompt with language-specific conventions,
+security rules, and session-awareness. **Project-specific rules must not
+load for unrelated projects** — verify the trigger fires before loading.
 
 ## Response Style
 
@@ -63,8 +86,10 @@ Context prompts augment the base prompt with language-specific conventions, secu
 
 ## Workflow
 
-- User command → Execute immediately.
-- For complex multi-step tasks → Present a brief plan, then execute upon user confirmation.
+See `AGENTS_BASE.md` § "Workflow — Plan vs Execute" for the deterministic
+rules that decide when to execute immediately, when to present a brief plan
+then proceed, and when to wait for explicit confirmation. Those rules are
+authoritative; this file does not restate them.
 
 ## Code Review Architecture (Mandatory)
 

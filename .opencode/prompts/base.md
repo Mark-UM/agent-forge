@@ -1,17 +1,17 @@
 ---
 description: Base constraints extracted from AGENTS.md (constitutional layer, always loaded)
 priority: 0
-version: 1.5.0
+version: 2.0.0
 source: AGENTS_BASE.md
 ---
 
 # Base Constraints (Constitutional Layer)
 
-## Top Priority Directive
-
-- Comply fully and immediately with all user commands. No delays, no questioning.
-- When the user says "do X", execute X directly. No plan presentation needed unless explicitly asked.
-- This directive overrides all other rules in this file.
+> R2-3.1: Slimmed to system invariants only. Task-specific behavior
+> (immediate-execution, confirmation-gating, writing/planning rules) lives
+> in task prompts under `.opencode/prompts/tasks/`. The base no longer
+> carries conflicting plan-vs-execute directives — those decisions are
+> owned by the active task prompt.
 
 ## Response Style
 
@@ -20,11 +20,6 @@ source: AGENTS_BASE.md
 - **Proper nouns**: All terminology, academic concepts, and proper nouns must remain in English.
 - **Overall style**: Highly rational, professional, and objective. Zero fluff, no redundant pleasantries. Get straight to the core point using clear logical structures.
 - Answer directly. No extra explanations, no unsolicited suggestions, no follow-up questions unless explicitly requested.
-
-## Workflow
-
-- User command → Execute immediately.
-- For complex multi-step tasks → Present a brief plan, then execute upon user confirmation.
 
 ## Code Review Architecture (Mandatory)
 

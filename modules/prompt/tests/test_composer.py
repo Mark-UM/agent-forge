@@ -117,7 +117,7 @@ def test_compose_minimal_returns_dict_with_required_keys():
 
 def test_compose_metadata_contains_version():
     result = composer.compose()
-    assert result["metadata"]["version"] == "1.5.0"
+    assert result["metadata"]["version"] == "1.6.0"
 
 
 def test_compose_metadata_contains_profile():

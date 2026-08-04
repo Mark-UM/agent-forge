@@ -324,13 +324,21 @@ def prewarm_cache(top_n=DEFAULT_TOP_N, days_window=DEFAULT_DAYS_WINDOW,
             continue
 
         # 构造缓存条目（与 search.py cache_store 一致）
+        # S12 fix: 区分三个时间戳，避免 prewarm 给旧数据"洗白"TTL：
+        # - retrieved_at: 原始条目的 fetch 时间（结果实际被抓取的时间）
+        # - cached_at: 缓存条目写入时间（TTL 计算基准，保持 time.time() 不变）
+        # - warmed_at: 标记本条目由 prewarm 写入（非实时搜索结果）
+        # - cache_schema_version: 迁移追踪（v2 = S12 引入三时间戳）
         cache_entry = {
             'query': query,
             'layers_used': entry.get('layers_used', []),
             'results_count': entry.get('results_count', len(top_results)),
             'top_results': top_results[:10],
             'score': entry.get('score', 0),
-            'cached_at': time.time(),  # 重置时间戳，重新计算 TTL
+            'cached_at': time.time(),  # 缓存写入时间（TTL 基准，语义正确）
+            'retrieved_at': entry.get('timestamp', ''),  # S12: 原始 fetch 时间
+            'warmed_at': time.time(),  # S12: 标记为 prewarm 写入
+            'cache_schema_version': 2,  # S12: schema 迁移追踪
         }
         cache[key] = cache_entry
         prewarmed += 1

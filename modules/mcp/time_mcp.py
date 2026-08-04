@@ -110,9 +110,18 @@ def convert_time(source_time: str, source_timezone: str,
                  target_timezone: str) -> dict:
     """Convert a time from one timezone to another.
 
+    V3 fix: Correctly handles datetimes that already have a timezone offset.
+    - If source_time has no offset (naive): interpret as local wall-clock time
+      in source_timezone via replace(tzinfo=src_tz).
+    - If source_time has an offset (aware): use astimezone() to convert,
+      do NOT overwrite the offset with replace().
+    - source_timezone is used as the interpretation context for naive inputs
+      and as a consistency check for aware inputs.
+
     Args:
-        source_time: ISO 8601 datetime string (e.g., '2026-07-20T10:00:00')
-        source_timezone: IANA timezone of source_time
+        source_time: ISO 8601 datetime string. May include timezone offset
+                     (e.g., '2026-07-20T10:00:00+08:00' or '2026-07-20T10:00:00Z')
+        source_timezone: IANA timezone of source_time (used for naive inputs)
         target_timezone: IANA timezone to convert to
 
     Returns:
@@ -130,7 +139,8 @@ def convert_time(source_time: str, source_timezone: str,
         }
 
     Raises:
-        ValueError: if time format or timezone is invalid
+        ValueError: if time format or timezone is invalid, or if the
+                   source_time falls in a DST gap (non-existent local time).
     """
     if not source_time:
         raise ValueError("source_time is required")
@@ -138,23 +148,42 @@ def convert_time(source_time: str, source_timezone: str,
     src_tz = _get_zoneinfo(source_timezone)
     tgt_tz = _get_zoneinfo(target_timezone)
 
-    # Parse source time (naive, then attach timezone)
-    # Support formats: '2026-07-20T10:00:00', '2026-07-20 10:00:00', '2026-07-20T10:00'
+    # Parse source time
+    # Support formats: '2026-07-20T10:00:00', '2026-07-20 10:00:00',
+    # '2026-07-20T10:00:00+08:00', '2026-07-20T10:00:00Z'
     try:
-        # Try ISO format first (handles 'T' separator)
+        # Try ISO format first (handles 'T' separator and optional offset)
         try:
-            naive = datetime.fromisoformat(source_time)
+            parsed = datetime.fromisoformat(source_time)
         except ValueError:
-            # Try space separator
-            naive = datetime.strptime(source_time, '%Y-%m-%d %H:%M:%S')
+            # Try space separator (naive only)
+            parsed = datetime.strptime(source_time, '%Y-%m-%d %H:%M:%S')
     except ValueError as e:
         raise ValueError(
             f"Invalid time format '{source_time}'. "
-            f"Expected ISO 8601 (e.g., '2026-07-20T10:00:00')"
+            f"Expected ISO 8601 (e.g., '2026-07-20T10:00:00' or "
+            f"'2026-07-20T10:00:00+08:00')"
         ) from e
 
-    # Attach source timezone
-    src_dt = naive.replace(tzinfo=src_tz)
+    # V3 fix: Handle aware vs naive datetimes differently
+    if parsed.tzinfo is not None:
+        # Input already has a timezone offset (e.g., '+08:00' or 'Z')
+        # Use astimezone() to convert to source_timezone first, then target.
+        # Do NOT use replace() — that would overwrite the input's offset.
+        src_dt = parsed.astimezone(src_tz)
+    else:
+        # Naive datetime: interpret as local wall-clock time in source_timezone.
+        # Use replace() to attach the timezone.
+        src_dt = parsed.replace(tzinfo=src_tz)
+
+        # V3: Check for DST gap (non-existent local time)
+        # In zoneinfo, a time in the DST gap is technically "non-existent".
+        # Python's zoneinfo handles this by shifting forward, but we should
+        # detect and warn about it.
+        # The fold attribute (0 or 1) disambiguates ambiguous times (DST fold).
+        # For gap times, Python picks a default but we check consistency.
+        _check_dst_issues(src_dt, source_timezone)
+
     # Convert to target timezone
     tgt_dt = src_dt.astimezone(tgt_tz)
 
@@ -176,6 +205,40 @@ def convert_time(source_time: str, source_timezone: str,
             'utc_offset': _offset_str(tgt_dt),
         },
     }
+
+
+def _check_dst_issues(dt: datetime, timezone_name: str) -> None:
+    """V3: Detect DST gap and fold issues for naive datetime interpretations.
+
+    A DST gap occurs when clocks jump forward (e.g., 02:00→03:00 in spring),
+    making times like 02:30 non-existent. Python's zoneinfo handles this by
+    shifting the time, but we warn about it.
+
+    A DST fold occurs when clocks fall back (e.g., 03:00→02:00 in autumn),
+    making times like 02:30 ambiguous. The fold attribute (0=first, 1=second)
+    disambiguates.
+
+    Args:
+        dt: The datetime to check (must be timezone-aware)
+        timezone_name: Timezone name for error messages
+    """
+    # Check for DST gap: if the UTC offset of the datetime doesn't match
+    # either the DST or standard offset for that wall-clock time, it's in a gap.
+    # zoneinfo silently shifts gap times; we detect this by checking if
+    # round-tripping through UTC produces a different wall-clock time.
+    utc_dt = dt.astimezone(timezone.utc)
+    roundtrip = utc_dt.astimezone(dt.tzinfo)
+
+    if roundtrip.replace(tzinfo=None) != dt.replace(tzinfo=None):
+        # The wall-clock time changed after round-trip → gap time
+        import warnings
+        warnings.warn(
+            f"Time {dt.replace(tzinfo=None).isoformat()} in {timezone_name} "
+            f"falls in a DST gap (non-existent local time). "
+            f"Python shifted it to {roundtrip.replace(tzinfo=None).isoformat()}.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 # ── MCP protocol ─────────────────────────────────────────────

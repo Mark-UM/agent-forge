@@ -1,9 +1,9 @@
 ---
-description: Two-axis code review (Standards + Spec)
+description: Three-stage sequential code review (Code + Structure + Risk)
 task_type: review
-leading_words: [standards, spec, smell, judgment-call]
+leading_words: [review, smell, judgment-call, structure, risk]
 priority: 100
-version: 1.5.0
+version: 2.0.0
 ---
 
 # Code Review Task
@@ -13,53 +13,65 @@ version: 1.5.0
 - Keywords: "审查" / "review" / "PR" / "diff"
 - Calling `/review` command
 
-## Two-axis review
+## Three-stage sequential review
 
-A change can pass one axis and fail the other. Report them **separately** to stop one axis masking the other.
+Reviews execute **sequentially**, not in parallel. Each stage has a dedicated
+read-only sub-agent. Any stage FAIL → fix and re-review (max 2 retry rounds
+per stage).
 
-### Axis 1: Standards
-Does the code conform to this repo's documented coding standards?
-
-Sources (in priority order):
-1. Repo's `CODING_STANDARDS.md` / `CONTRIBUTING.md` if exists
-2. AGENTS.md constraints
-3. **Smell baseline** (Fowler, _Refactoring_ ch.3):
-   - Mysterious Name → rename
-   - Duplicated Code → extract
-   - Feature Envy → move method
-   - Data Clumps → bundle into type
-   - Primitive Obsession → give concept its own type
-   - Repeated Switches → polymorphism
-   - Shotgun Surgery → gather into one module
-   - Divergent Change → split by reason
-   - Speculative Generality → delete
-   - Message Chains → hide walk
-   - Middle Man → cut delegation
-   - Refused Bequest → drop inheritance
-
-**Rule**: documented repo standard always wins; baseline smells are always judgment calls (labelled heuristic, never hard violation).
-
-### Axis 2: Spec
-Does the code faithfully implement the originating issue / PRD / spec?
+### Stage 1: review-code
+Does the code have logic errors, bugs, exception handling gaps, boundary
+condition issues, naming problems, or style violations?
 
 Check:
-- (a) Requirements missing or partial
-- (b) Behavior not asked for (scope creep)
-- (c) Implementation looks wrong despite appearing implemented
+- Logic errors and incorrect control flow
+- Unhandled exceptions or overly broad catch blocks
+- Boundary conditions (empty input, off-by-one, overflow)
+- Naming clarity and consistency
+- Code style conformance to repo standards
 
-Quote the spec line for each finding.
+### Stage 2: review-structure
+Is the file organization, dependency integrity, file placement, module
+coupling, and config consistency correct?
+
+Check:
+- File placement matches module boundaries
+- Import dependencies are acyclic and minimal
+- Module coupling is appropriate (no hidden circular deps)
+- Config consistency across files (e.g., package.json vs tsconfig)
+- No orphaned files or dead imports
+
+### Stage 3: review-risk
+Are there security risks, dangerous operations, or data loss potential?
+
+Check:
+- Security vulnerabilities (injection, SSRF, path traversal)
+- Dangerous operations (force delete, overwrite without backup)
+- Data loss potential (non-atomic writes, missing rollback)
+- Sensitive data exposure in logs or outputs
 
 ## Process
 
 1. **Pin the fixed point**: `git diff <fixed-point>...HEAD` (three-dot, against merge-base)
 2. **Identify spec source**: issue references / PRD file / ask user
-3. **Spawn both sub-agents in parallel** (review-standards + review-spec) — single message, two Agent tool calls
-4. **Aggregate**: present under `## Standards` and `## Spec` headings verbatim; do NOT merge or rerank
+3. **Run review-code** → wait for result → if FAIL, fix and re-run (max 2 retries)
+4. **Run review-structure** → wait for result → if FAIL, fix and re-run (max 2 retries)
+5. **Run review-risk** → wait for result → if FAIL, fix and re-run (max 2 retries)
+6. **Aggregate**: present findings under `## Code`, `## Structure`, and `## Risk` headings
 
 ## Completion criteria
-- Total findings per axis reported
-- Worst issue within each axis identified
-- No single winner across axes (reranking defeats the separation)
+- Total findings per stage reported
+- Worst issue within each stage identified
+- Final verdict: PASS only if all three stages pass
+- Simple Q&A / chat → skip review entirely
 
-## Integration
-This task integrates with the existing 3-stage review pipeline (review-code → review-structure → review-risk). Use `/review` to trigger the pipeline.
+## Agent configuration
+
+All three review agents are defined in `.opencode/agents/`:
+- `review-code.md` — uses deepseek-v4-flash, read-only (no edit/write/bash)
+- `review-structure.md` — uses deepseek-v4-flash, read-only
+- `review-risk.md` — uses deepseek-v4-flash, read-only
+
+Deprecated agent names are enforced by the prompt reference checker
+(`modules/prompt/tests/test_prompt_references.py`) and must not appear
+in any file under `.opencode/`.

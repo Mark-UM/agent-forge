@@ -94,13 +94,28 @@ def test_add_schedule_with_all_fields(temp_db, sample_due_at):
         description="项目评审会议",
         priority="high",
         source_ref="/reports/weekly.md",
-        recurrence="0 9 * * 1",
+        # SC2: recurrence is now unsupported (empty = one-shot)
+        recurrence="",
     )
     item = get_schedule(sid)
     assert item["description"] == "项目评审会议"
     assert item["priority"] == "high"
     assert item["source_ref"] == "/reports/weekly.md"
-    assert item["recurrence"] == "0 9 * * 1"
+    assert item["recurrence"] == "" or item["recurrence"] is None
+
+
+def test_sc2_add_schedule_rejects_recurrence(temp_db, sample_due_at):
+    """SC2: add_schedule should reject non-empty recurrence (unsupported)."""
+    from modules.orchestrator.schedule_store import add_schedule
+    import pytest
+
+    with pytest.raises(ValueError, match="recurrence is not supported"):
+        add_schedule(
+            title="Recurring task",
+            due_at=sample_due_at,
+            source="user_manual",
+            recurrence="0 9 * * 1",  # Non-empty → rejected
+        )
 
 
 def test_add_schedule_invalid_priority(temp_db, sample_due_at):

@@ -97,13 +97,14 @@ DEFAULT_CONFIG = {
 }
 
 # Step 执行顺序（按 search.md）
+# S4/S5 fix: 'stream' and 'prewarm' removed from STEP_ORDER.
+#   They are external capabilities, not pipeline steps that execute per-query.
+#   stream_events() and prewarm_cache() are standalone functions.
 STEP_ORDER = [
     'redact_pii',         # 0
     'plan',                # 0.5 (optional)
     'aggregate_pre',       # 0.7 (optional)
     'parallel_exec',       # 0.8 (optional)
-    'stream',              # 0.9 (optional)
-    'prewarm',             # 0.10 (optional)
     'i18n',                 # 0.11 (optional)
     'arxiv',                # 0.12 (optional)
     'semantic_scholar',     # 0.13 (optional)
@@ -112,11 +113,42 @@ STEP_ORDER = [
     'classify_query',       # 3
     'execute_layers',       # 4
     'dedup',                # 5
-    'format',               # 6
-    'verify',               # 6.5 (v4.4)
+    'cache_store',          # 5.5 (S3 fix: write to cache after dedup)
+    'aggregate',            # 5.7 (S2 fix: actual aggregation, not just a marker)
+    'verify',               # 5.8 (S10 fix: moved before format so output includes verification)
+    'format',               # 6 (S10 fix: includes verification status in output)
     'log',                  # 7
     'persist_memory',       # 7.5 (optional)
 ]
+
+# S7 fix: explicit mapping from step_name to config key.
+# Both real execution and dry_run use this mapping via is_step_enabled().
+STEP_CONFIG_KEYS = {
+    'redact_pii': 'enable_pii_redact',
+    'plan': 'enable_planner',
+    'aggregate_pre': 'enable_aggregator',
+    'parallel_exec': 'enable_parallel',
+    'i18n': 'enable_i18n',
+    'arxiv': 'enable_arxiv',
+    'semantic_scholar': 'enable_s2',
+    'cache_lookup': None,        # always enabled (no config key)
+    'detect_location': None,     # always enabled
+    'classify_query': None,      # always enabled
+    'execute_layers': None,      # always enabled
+    'dedup': None,               # always enabled
+    'cache_store': None,         # always enabled (S3)
+    'aggregate': 'enable_aggregator',  # S2: uses same flag as aggregate_pre
+    'format': None,              # always enabled
+    'verify': 'enable_verifier',
+    'log': None,                 # always enabled
+    'persist_memory': 'enable_memory',
+}
+
+# Steps that are optional (default disabled unless flag/config enables them)
+OPTIONAL_STEPS = frozenset({
+    'plan', 'aggregate_pre', 'parallel_exec',
+    'i18n', 'arxiv', 'semantic_scholar', 'aggregate', 'persist_memory',
+})
 
 
 # ── SearchOrchestrator 类 ───────────────────────────────────────
@@ -224,15 +256,37 @@ class SearchOrchestrator:
                 - 'search_mcp': (query) -> list[dict]  搜索 MCP（duckduckgo/searxng/serper）
                 - 'fetch_mcp': (url) -> str           fetch MCP（用于 verifier）
                 - 'planner_fn': (query) -> dict       planner 模块
-                - 'aggregator_fn': (query, results) -> str
+                - 'aggregator_fn': (query, results) -> str   # S2: actually called now
                 - 'cache_get_fn': (query) -> dict|None
-                - 'cache_store_fn': (query, results) -> None
+                - 'cache_store_fn': (query, results) -> None  # S3: actually called now
                 - 'log_fn': (entry) -> None
                 - 'memory_fn': (key, value) -> None
         """
         if isinstance(callbacks, dict):
             self._callbacks.update(callbacks)
         return self
+
+    # ── 辅助方法 ────────────────────────────────────────────────
+
+    def is_step_enabled(self, step_name):
+        """S7 fix: unified step-enable check used by both execution and dry_run.
+
+        Args:
+            step_name: step name from STEP_ORDER
+
+        Returns:
+            bool: True if the step should execute
+        """
+        config_key = STEP_CONFIG_KEYS.get(step_name)
+        if config_key is None:
+            # Mandatory step (no config key) → always enabled
+            return True
+        return self.config.get(config_key, False) if step_name in OPTIONAL_STEPS \
+            else self.config.get(config_key, True)
+
+    def _invalidate_result(self):
+        """S9 fix: invalidate cached _result on any state change."""
+        self._result = None
 
     # ── Step 0: redact_pii ──────────────────────────────────────
 
@@ -289,11 +343,22 @@ class SearchOrchestrator:
         try:
             result = planner_fn(self.query)
             if isinstance(result, dict):
-                self.subqueries = result.get('subqueries', [])
+                # S1 fix: canonical field is 'sub_queries' (matches planner.py output).
+                # Backward compat: also read deprecated 'subqueries' with warning.
+                self.subqueries = result.get('sub_queries', [])
+                if not self.subqueries and 'subqueries' in result:
+                    import warnings
+                    warnings.warn(
+                        "planner_fn returned 'subqueries' (deprecated); "
+                        "use 'sub_queries' instead",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                    self.subqueries = result.get('subqueries', [])
             elif isinstance(result, list):
                 self.subqueries = result
             return {
-                'subqueries': self.subqueries,
+                'sub_queries': self.subqueries,
                 'count': len(self.subqueries),
                 'max': self.config['max_subqueries'],
             }
@@ -337,27 +402,25 @@ class SearchOrchestrator:
             self.warnings.append(f'parallel_exec failed: {type(e).__name__}')
             return {'error': str(e)[:200]}
 
-    # ── Step 0.9: stream ───────────────────────────────────────
+    # ── External capabilities (not in STEP_ORDER) ─────────────
+    # S4/S5 fix: stream and prewarm are external capabilities,
+    # not pipeline steps. They must not return 'success' without doing work.
 
     def stream(self):
-        """Step 0.9: 流式输出 JSON Lines（仅标记，实际输出在 format）。"""
-        return self._execute_step('stream', self._stream_impl)
+        """S4 fix: Streaming is an external capability, not a pipeline step.
 
-    def _stream_impl(self):
-        if not self.config['enable_stream']:
-            return {'skipped': True}
-        return {'stream_enabled': True}
-
-    # ── Step 0.10: prewarm ─────────────────────────────────────
+        Returns 'unsupported' when called as a step.
+        Use stream_events() for actual streaming.
+        """
+        return {'unsupported': True, 'reason': 'streaming is an external capability, not a pipeline step'}
 
     def prewarm(self):
-        """Step 0.10: 缓存预热（仅标记，实际预热是独立命令）。"""
-        return self._execute_step('prewarm', self._prewarm_impl)
+        """S5 fix: Prewarm is an external capability, not a pipeline step.
 
-    def _prewarm_impl(self):
-        if not self.config['enable_prewarm']:
-            return {'skipped': True}
-        return {'prewarm_enabled': True}
+        Returns 'unsupported' when called as a step.
+        Use prewarm_cache() from prewarm.py for actual cache warming.
+        """
+        return {'unsupported': True, 'reason': 'prewarm is an external capability, not a pipeline step'}
 
     # ── Step 0.11: i18n ────────────────────────────────────────
 
@@ -547,15 +610,37 @@ class SearchOrchestrator:
         if not self.results:
             return {'count': 0}
 
-        seen_urls = set()
+        # S8 fix: URL-less results use stable fingerprint instead of empty string.
+        # Fingerprint = source + normalized_title + normalized_snippet prefix.
+        seen_keys = set()
         deduped = []
         for r in self.results:
             if not isinstance(r, dict):
                 continue
             url = r.get('url', '')
-            if url in seen_urls:
+            if url:
+                # Normalize URL: lowercase host, strip fragment
+                from urllib.parse import urlparse, urlunparse
+                try:
+                    parsed = urlparse(url)
+                    normalized = urlunparse((
+                        parsed.scheme.lower(),
+                        parsed.netloc.lower(),
+                        parsed.path,
+                        parsed.params, '', ''  # drop query/fragment for dedup key
+                    ))
+                except Exception:
+                    normalized = url
+                key = ('url', normalized)
+            else:
+                # URL-less: use content fingerprint
+                source = str(r.get('source', 'unknown'))
+                title = str(r.get('title', '')).strip().lower()[:200]
+                snippet = str(r.get('snippet', '')).strip().lower()[:100]
+                key = ('fingerprint', source, title, snippet)
+            if key in seen_keys:
                 continue
-            seen_urls.add(url)
+            seen_keys.add(key)
             deduped.append(r)
         original_count = len(self.results)
         self.results = deduped
@@ -564,6 +649,87 @@ class SearchOrchestrator:
             'deduped': len(self.results),
             'removed': original_count - len(self.results),
         }
+
+    # ── Step 5.5: cache_store (S3 fix) ────────────────────────
+
+    def cache_store(self):
+        """Step 5.5: S3 fix — write deduped results to cache.
+
+        Placed after dedup (clean results) and before format/verify
+        (which add derived content that should NOT overwrite raw results).
+        """
+        return self._execute_step('cache_store', self._cache_store_impl)
+
+    def _cache_store_impl(self):
+        # Don't cache if cache was the source (avoid circular overwrite)
+        if self.cache_hit:
+            return {'skipped': True, 'reason': 'cache hit (no overwrite)'}
+
+        cache_store_fn = self._callbacks.get('cache_store_fn')
+        if cache_store_fn is None:
+            return {'skipped': True, 'reason': 'cache_store_fn not injected'}
+
+        if not self.results:
+            return {'skipped': True, 'reason': 'no results to cache'}
+
+        try:
+            cache_entry = {
+                'query': self.query,
+                'results': self.results,
+                'results_count': len(self.results),
+                'cached_at': time.time(),
+                'retrieved_at': time.time(),
+                'cache_schema_version': 2,  # S3: schema version for migration
+                'verified': False,  # verification hasn't run yet at this point
+            }
+            cache_store_fn(self.query, cache_entry)
+            return {
+                'stored': True,
+                'results_count': len(self.results),
+                'cached_at': cache_entry['cached_at'],
+            }
+        except Exception as e:
+            self.warnings.append(f'cache_store failed: {type(e).__name__}')
+            return {'error': str(e)[:200]}
+
+    # ── Step 5.7: aggregate (S2 fix) ──────────────────────────
+
+    def aggregate(self):
+        """Step 5.7: S2 fix — actually call aggregator_fn if injected.
+
+        This replaces the old aggregate_pre which only returned a marker.
+        Aggregation runs after dedup (clean results) and before format.
+        """
+        return self._execute_step('aggregate', self._aggregate_impl)
+
+    def _aggregate_impl(self):
+        if not self.is_step_enabled('aggregate'):
+            return {'skipped': True}
+
+        aggregator_fn = self._callbacks.get('aggregator_fn')
+        if aggregator_fn is None:
+            return {'skipped': True, 'reason': 'aggregator_fn not injected'}
+
+        if not self.results:
+            return {'skipped': True, 'reason': 'no results to aggregate'}
+
+        try:
+            aggregated = aggregator_fn(self.query, self.results)
+            self.aggregated = aggregated
+            return {
+                'invoked': True,
+                'input_count': len(self.results),
+                'output_type': type(aggregated).__name__,
+                'output_length': len(str(aggregated)) if aggregated else 0,
+            }
+        except Exception as e:
+            self.warnings.append(f'aggregator failed: {type(e).__name__}')
+            # S2: preserve un-aggregated results on failure
+            return {
+                'invoked': False,
+                'error': str(e)[:200],
+                'fallback': 'results preserved un-aggregated',
+            }
 
     # ── Step 6: format ────────────────────────────────────────
 
@@ -590,6 +756,37 @@ class SearchOrchestrator:
             lines.append(f'- Source: {source}')
             if snippet:
                 lines.append(f'- Snippet: {snippet}')
+            lines.append('')
+
+        # S10 fix: include verification status in formatted output
+        if self.verification_report is not None:
+            lines.append('---')
+            lines.append('')
+            lines.append('## Verification Status')
+            verified = self.verification_report.get('verified', False)
+            # S13: use more accurate naming for weak verification
+            if verified:
+                consistency = self.verification_report.get('cross_check', {}).get('consistency_score', 0)
+                if consistency >= 0.8:
+                    lines.append(f'- Status: **verified** (lexical_consistency={consistency:.2f})')
+                else:
+                    lines.append(f'- Status: **weak_support** (lexical_consistency={consistency:.2f})')
+            else:
+                lines.append(f'- Status: **unverified**')
+            trigger = self.verification_report.get('trigger_reason', '')
+            if trigger:
+                lines.append(f'- Trigger: {trigger}')
+            warnings = self.verification_report.get('warnings', [])
+            if warnings:
+                lines.append(f'- Warnings: {"; ".join(warnings[:3])}')
+            lines.append('')
+
+        # S2: include aggregated summary if available
+        if self.aggregated:
+            lines.append('---')
+            lines.append('')
+            lines.append('## Aggregated Summary')
+            lines.append(str(self.aggregated)[:2000])
             lines.append('')
 
         self.formatted_output = '\n'.join(lines)
@@ -719,6 +916,9 @@ class SearchOrchestrator:
         self.executed_steps.append(step_name)
         self.end_time = time.time()
 
+        # S9 fix: invalidate cached result after every step execution
+        self._invalidate_result()
+
         return self  # 链式调用
 
     def run_all(self):
@@ -742,28 +942,31 @@ class SearchOrchestrator:
 
     @property
     def result(self):
-        """获取最终 pipeline 结果。"""
-        if self._result is None:
-            self._result = {
-                'query': self.query,  # v4.4 Review-Risk: 仅返回脱敏后 query
-                # v4.4 Review-Risk CRITICAL: original_query 不暴露在 result（PII 防护）
-                'results': self.results,
-                'results_count': len(self.results),
-                'formatted_output': self.formatted_output,
-                'verification': self.verification_report,
-                'cache_hit': self.cache_hit,
-                'location': self.location,
-                'query_class': self.query_class,
-                'subqueries': self.subqueries,
-                'step_reports': self.step_reports,
-                'executed_steps': self.executed_steps,
-                'warnings': self.warnings,
-                'errors': self.errors,
-                'memory_persisted': self.memory_persisted,
-                'duration_ms': int(((self.end_time or time.time()) -
-                                    (self.start_time or time.time())) * 1000),
-            }
-        return self._result
+        """获取最终 pipeline 结果。
+
+        S9 fix: result is always computed from current state, never cached.
+        The old _result cache could return stale data after direct state mutation.
+        """
+        return {
+            'query': self.query,  # v4.4 Review-Risk: 仅返回脱敏后 query
+            # v4.4 Review-Risk CRITICAL: original_query 不暴露在 result（PII 防护）
+            'results': self.results,
+            'results_count': len(self.results),
+            'formatted_output': self.formatted_output,
+            'verification': self.verification_report,
+            'cache_hit': self.cache_hit,
+            'location': self.location,
+            'query_class': self.query_class,
+            'sub_queries': self.subqueries,
+            'aggregated': self.aggregated,
+            'step_reports': self.step_reports,
+            'executed_steps': self.executed_steps,
+            'warnings': self.warnings,
+            'errors': self.errors,
+            'memory_persisted': self.memory_persisted,
+            'duration_ms': int(((self.end_time or time.time()) -
+                                (self.start_time or time.time())) * 1000),
+        }
 
     def dry_run(self):
         """打印 pipeline 执行计划但不实际执行。"""
@@ -774,23 +977,15 @@ class SearchOrchestrator:
         }
         for step_name in STEP_ORDER:
             method = getattr(self, step_name, None)
-            enabled = (
-                step_name != 'redact_pii' or self.config['enable_pii_redact']
-            )
-            # 标注 optional steps
-            optional = step_name in (
-                'plan', 'aggregate_pre', 'parallel_exec', 'stream',
-                'prewarm', 'i18n', 'arxiv', 'semantic_scholar', 'persist_memory'
-            )
-            enabled_flag = (
-                self.config.get(f'enable_{step_name}', True)
-                if not optional else self.config.get(f'enable_{step_name}', False)
-            )
+            # S7 fix: use unified is_step_enabled() instead of guessing config keys
+            enabled = self.is_step_enabled(step_name)
+            optional = step_name in OPTIONAL_STEPS
             plan['steps'].append({
                 'step': step_name,
                 'method': method.__name__ if method else None,
-                'enabled': enabled_flag if optional else enabled,
+                'enabled': enabled,
                 'optional': optional,
+                'config_key': STEP_CONFIG_KEYS.get(step_name),
             })
         return plan
 
