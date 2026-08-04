@@ -65,6 +65,7 @@ jobs:
           modules/search/tests/test_contract_phase1.py
           modules/search/tests/test_filter.py
           modules/search/tests/test_orchestrator.py
+          modules/scheduler/tests/test_trigger_runtime.py
           modules/registry/tests/test_strict_discovery.py
           modules/prompt/tests/test_context_composition.py
           modules/prompt/tests/test_context.py
