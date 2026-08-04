@@ -65,8 +65,9 @@ if errorlevel 1 (
     copy /Y "%PROJECT_ROOT%\AGENTS.md" "%PROJECT_ROOT%\AGENTS_COMPOSED.md" >nul
 )
 
-echo [agent-forge] Launching OpenCode. MCP and plugin state is defined in opencode.json.
-opencode %*
+echo [agent-forge] Starting supervised Browser and Scheduler services...
+echo [agent-forge] Optional service failures are reported but do not block OpenCode startup.
+"%PYTHON%" -m modules.runtime.supervisor run --allow-degraded -- "%ComSpec%" /d /s /c opencode %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 popd
