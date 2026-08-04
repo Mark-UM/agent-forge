@@ -44,6 +44,9 @@ jobs:
       - name: Compile first-party modules
         run: python -m compileall -q modules
 
+      - name: Validate capability manifests strictly
+        run: python -m modules.registry validate --strict
+
       - name: Run security and core regression tests
         run: >-
           python -m pytest -q
@@ -94,8 +97,8 @@ jobs:
       - name: Compile first-party modules
         run: python -m compileall -q modules
 
-      - name: Validate capability manifests
-        run: python -m modules.registry validate
+      - name: Validate capability manifests strictly
+        run: python -m modules.registry validate --strict
 
       - name: Run complete pytest suite
         run: python -m pytest -q
