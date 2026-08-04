@@ -1,7 +1,7 @@
 {
   "name": "scheduler",
-  "version": "2.0.1",
-  "description": "Authenticated loopback scheduler with SQLite job and run persistence",
+  "version": "3.0.0",
+  "description": "Authenticated loopback scheduler with cron, one-shot date, and fixed-interval triggers backed by authoritative SQLite Job and Run records",
   "entrypoints": {
     "daemon": "python -m modules.scheduler.secure_daemon",
     "cli": "python -m modules.scheduler.secure_daemon --check"
@@ -9,13 +9,28 @@
   "capabilities": [
     {
       "name": "scheduler.cron",
-      "version": "2.0",
-      "description": "Persist and execute cron jobs with one authoritative JobRun per execution"
+      "version": "3.0",
+      "description": "Persist, restore, pause, resume, and execute five-field cron jobs"
     },
     {
-      "name": "scheduler.manual-run",
+      "name": "scheduler.date",
+      "version": "1.0",
+      "description": "Execute an aware one-shot ISO 8601 date job and persist completed or error terminal state"
+    },
+    {
+      "name": "scheduler.interval",
+      "version": "1.0",
+      "description": "Execute a bounded fixed-second interval job with persisted next-run metadata"
+    },
+    {
+      "name": "scheduler.manual_run",
       "version": "2.0",
-      "description": "Trigger asynchronous manual runs and poll the same returned run_id"
+      "description": "Trigger asynchronous manual runs and poll the same authoritative run_id"
+    },
+    {
+      "name": "scheduler.timezone",
+      "version": "1.0",
+      "description": "Resolve request, AGENT_FORGE_USER_TZ, TZ, system, then UTC and normalize date runs to UTC"
     }
   ],
   "dependencies": {
@@ -35,7 +50,7 @@
   "health_checks": [
     {
       "command": "python -m modules.scheduler.secure_daemon --check",
-      "description": "Verify scheduler dependencies, SQLite state and authenticated entry point",
+      "description": "Verify scheduler dependencies, trigger schema, authentication, and SQLite state",
       "timeout": 30
     }
   ],
@@ -46,9 +61,10 @@
       "tables": [
         "scheduler_jobs",
         "job_runs",
-        "schema_migrations"
+        "scheduler_meta",
+        "quarantined_jobs"
       ],
-      "description": "Single source of truth for scheduler jobs, executions and migration state"
+      "description": "Single source of truth for trigger definitions, executions, terminal states, and migrations"
     },
     {
       "type": "secret-file",
@@ -57,15 +73,5 @@
       "description": "Generated daemon bearer token; never print its value"
     }
   ],
-  "experimental": false,
-  "bind": "127.0.0.1:9225",
-  "job_types": {
-    "file_reindex": "implemented",
-    "report_collect": "implemented, subject to collection pipeline limitations",
-    "action_extract": "implemented",
-    "custom": "implemented for an exact module-and-function whitelist",
-    "memory_review": "implemented as a read-only explicit task scan and local report"
-  },
-  "fallback": "Without APScheduler the service reports degraded mode and refuses schedule creation rather than persisting false-active jobs",
-  "recovery": "Legacy jobs.json migration is idempotent; SQLite remains authoritative and failed job restoration is recorded as an error"
+  "experimental": false
 }
