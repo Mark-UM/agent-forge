@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""Supervise Agent Forge local daemons and an optional foreground command.
+"""Authenticated process supervisor for Agent Forge local daemons.
 
-The supervisor is intentionally standard-library only. It starts the Browser
-and Scheduler daemons with their existing bearer tokens, verifies authenticated
-health before declaring readiness, records non-secret process state, and cleans
-up only processes that it owns.
-
-Commands:
-
-    python -m modules.runtime.supervisor start --allow-degraded
-    python -m modules.runtime.supervisor status --json
-    python -m modules.runtime.supervisor stop
-    python -m modules.runtime.supervisor restart --allow-degraded
-    python -m modules.runtime.supervisor run --allow-degraded -- opencode ...
+The supervisor owns only processes it launches. Existing Browser or Scheduler
+instances are adopted after authenticated health succeeds and are never stopped
+by this process. State and logs contain token fingerprints only, never bearer
+secrets.
 """
 from __future__ import annotations
 
@@ -28,13 +20,9 @@ import subprocess
 import sys
 import time
 from typing import Any, Iterable, Mapping, Optional
-import urllib.error
 import urllib.request
 
-from modules.common.security import (
-    load_or_create_service_token,
-    token_fingerprint,
-)
+from modules.common.security import load_or_create_service_token, token_fingerprint
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = PROJECT_ROOT / "_runtime" / "supervisor"
@@ -49,15 +37,15 @@ DEFAULT_MAX_RESTARTS = 3
 
 
 class SupervisorError(RuntimeError):
-    """Base class for runtime supervision errors."""
+    pass
 
 
 class PortConflictError(SupervisorError):
-    """A configured port is occupied by a non-authenticated service."""
+    pass
 
 
 class ServiceStartError(SupervisorError):
-    """A managed service failed to become healthy."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -96,8 +84,6 @@ class ServiceState:
     last_error: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize process metadata without bearer tokens."""
-
         return {
             "name": self.name,
             "pid": self.pid,
@@ -172,7 +158,7 @@ def _utc_now() -> str:
 def service_specs(env: Mapping[str, str] | None = None) -> dict[str, ServiceSpec]:
     environment = os.environ if env is None else env
 
-    def port(name: str, default: int) -> int:
+    def parse_port(name: str, default: int) -> int:
         try:
             value = int(environment.get(name, str(default)))
         except ValueError as exc:
@@ -183,17 +169,17 @@ def service_specs(env: Mapping[str, str] | None = None) -> dict[str, ServiceSpec
 
     return {
         "browser": ServiceSpec(
-            name="browser",
-            module="modules.browser.daemon",
-            host="127.0.0.1",
-            port=port("AGENT_FORGE_BROWSER_PORT", 9223),
+            "browser",
+            "modules.browser.daemon",
+            "127.0.0.1",
+            parse_port("AGENT_FORGE_BROWSER_PORT", 9223),
             token_service="browser",
         ),
         "scheduler": ServiceSpec(
-            name="scheduler",
-            module="modules.scheduler.secure_daemon",
-            host="127.0.0.1",
-            port=port("AGENT_FORGE_SCHEDULER_PORT", 9225),
+            "scheduler",
+            "modules.scheduler.secure_daemon",
+            "127.0.0.1",
+            parse_port("AGENT_FORGE_SCHEDULER_PORT", 9225),
             token_service="scheduler",
         ),
     }
@@ -206,27 +192,27 @@ def parse_service_names(
 ) -> list[str]:
     environment = os.environ if env is None else env
     if value is None:
-        raw_items = environment.get(
+        raw_items: Iterable[str] = environment.get(
             "AGENT_FORGE_SUPERVISOR_SERVICES", "scheduler,browser"
         ).split(",")
     elif isinstance(value, str):
         raw_items = value.split(",")
     else:
-        raw_items = list(value)
+        raw_items = value
     available = service_specs(environment)
-    output: list[str] = []
+    selected: list[str] = []
     for raw in raw_items:
         name = str(raw).strip().lower()
-        if not name or name in output:
+        if not name or name in selected:
             continue
         if name not in available:
             raise ValueError(
                 f"unknown service {name!r}; expected one of {sorted(available)}"
             )
-        output.append(name)
-    if not output:
+        selected.append(name)
+    if not selected:
         raise ValueError("at least one service must be selected")
-    return output
+    return selected
 
 
 def _float_env(name: str, default: float) -> float:
@@ -279,13 +265,13 @@ def _request_json(
         method=method,
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = response.read(MAX_HTTP_BYTES + 1)
-        if len(payload) > MAX_HTTP_BYTES:
+        raw = response.read(MAX_HTTP_BYTES + 1)
+        if len(raw) > MAX_HTTP_BYTES:
             raise SupervisorError(f"{spec.name} response exceeded safety limit")
-        value = json.loads(payload.decode("utf-8"))
-        if not isinstance(value, dict):
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
             raise SupervisorError(f"{spec.name} returned a non-object response")
-        return value
+        return payload
 
 
 def _port_open(spec: ServiceSpec, timeout: float = 0.4) -> bool:
@@ -298,7 +284,7 @@ def _port_open(spec: ServiceSpec, timeout: float = 0.4) -> bool:
 
 def _healthy(spec: ServiceSpec, token: str) -> bool:
     try:
-        result = _request_json(
+        payload = _request_json(
             spec,
             token,
             method="GET",
@@ -308,8 +294,8 @@ def _healthy(spec: ServiceSpec, token: str) -> bool:
     except Exception:
         return False
     if spec.name == "browser":
-        return result.get("ok") is True
-    return result.get("status") in {"running", "degraded"}
+        return payload.get("ok") is True
+    return payload.get("status") in {"running", "degraded"}
 
 
 def _pid_alive(pid: Optional[int]) -> bool:
@@ -350,20 +336,17 @@ def read_state() -> dict[str, ServiceState]:
         return {}
     if not isinstance(payload, dict) or payload.get("project_root") != str(PROJECT_ROOT):
         return {}
-    services = payload.get("services", {})
-    if not isinstance(services, dict):
+    raw_services = payload.get("services", {})
+    if not isinstance(raw_services, dict):
         return {}
-    output: dict[str, ServiceState] = {}
-    for name, raw in services.items():
-        if isinstance(raw, dict):
-            output[str(name)] = ServiceState.from_dict(raw)
-    return output
+    return {
+        str(name): ServiceState.from_dict(raw)
+        for name, raw in raw_services.items()
+        if isinstance(raw, dict)
+    }
 
 
-def _launch_process(
-    spec: ServiceSpec,
-    token: str,
-) -> subprocess.Popen:
+def _launch_process(spec: ServiceSpec, token: str) -> subprocess.Popen:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"{spec.name}.log"
     handle = log_path.open("a", encoding="utf-8", buffering=1)
@@ -435,7 +418,6 @@ def start_service(
     token = _token(spec)
     fingerprint = token_fingerprint(token)
     log_path = str(LOG_DIR / f"{spec.name}.log")
-
     if _port_open(spec):
         if not _healthy(spec, token):
             raise PortConflictError(
@@ -443,17 +425,17 @@ def start_service(
                 f"authenticated {spec.name} health"
             )
         return ServiceState(
-            name=spec.name,
-            pid=None,
-            command=list(spec.command),
-            host=spec.host,
-            port=spec.port,
-            status="healthy",
-            managed=False,
-            adopted=True,
-            started_at=_utc_now(),
-            log_path=log_path,
-            token_fingerprint=fingerprint,
+            spec.name,
+            None,
+            list(spec.command),
+            spec.host,
+            spec.port,
+            "healthy",
+            False,
+            True,
+            _utc_now(),
+            log_path,
+            fingerprint,
         )
 
     process = _launch_process(spec, token)
@@ -472,17 +454,17 @@ def start_service(
             )
         if _healthy(spec, token):
             return ServiceState(
-                name=spec.name,
-                pid=process.pid,
-                command=list(spec.command),
-                host=spec.host,
-                port=spec.port,
-                status="healthy",
-                managed=True,
-                adopted=False,
-                started_at=_utc_now(),
-                log_path=log_path,
-                token_fingerprint=fingerprint,
+                spec.name,
+                process.pid,
+                list(spec.command),
+                spec.host,
+                spec.port,
+                "healthy",
+                True,
+                False,
+                _utc_now(),
+                log_path,
+                fingerprint,
             )
         time.sleep(DEFAULT_POLL_SECONDS)
 
@@ -501,9 +483,7 @@ def stop_service(
     if state.adopted or not state.managed:
         state.status = "adopted"
         return state
-
-    specs = service_specs()
-    spec = specs.get(state.name)
+    spec = service_specs().get(state.name)
     timeout = (
         stop_timeout
         if stop_timeout is not None
@@ -520,7 +500,6 @@ def stop_service(
             )
         except Exception:
             pass
-
     deadline = time.monotonic() + timeout
     while _pid_alive(state.pid) and time.monotonic() < deadline:
         time.sleep(DEFAULT_POLL_SECONDS)
@@ -552,8 +531,10 @@ def start_services(
     return report
 
 
-def stop_services(states: Optional[Mapping[str, ServiceState]] = None) -> dict[str, ServiceState]:
-    selected = dict(states or read_state())
+def stop_services(
+    states: Optional[Mapping[str, ServiceState]] = None,
+) -> dict[str, ServiceState]:
+    selected = dict(read_state() if states is None else states)
     stopped: dict[str, ServiceState] = {}
     for name, state in reversed(list(selected.items())):
         stopped[name] = stop_service(state)
@@ -566,12 +547,11 @@ def service_status(
     state: Optional[ServiceState],
 ) -> dict[str, Any]:
     token = _token(spec)
-    healthy = _healthy(spec, token)
     return {
         "name": spec.name,
         "host": spec.host,
         "port": spec.port,
-        "healthy": healthy,
+        "healthy": _healthy(spec, token),
         "port_open": _port_open(spec),
         "pid": state.pid if state else None,
         "pid_alive": _pid_alive(state.pid) if state else False,
@@ -585,9 +565,9 @@ def service_status(
 
 def status_report(names: Iterable[str]) -> dict[str, Any]:
     specs = service_specs()
-    state = read_state()
+    states = read_state()
     services = {
-        name: service_status(specs[name], state.get(name)) for name in names
+        name: service_status(specs[name], states.get(name)) for name in names
     }
     return {
         "healthy": all(item["healthy"] for item in services.values()),
@@ -596,14 +576,10 @@ def status_report(names: Iterable[str]) -> dict[str, Any]:
     }
 
 
-def _restart_state(
-    spec: ServiceSpec,
-    state: ServiceState,
-) -> ServiceState:
+def _restart_state(spec: ServiceSpec, state: ServiceState) -> ServiceState:
     restart_count = state.restart_count + 1
     stop_service(state, stop_timeout=1.0)
-    delay = min(2 ** max(0, restart_count - 1), 8)
-    time.sleep(delay)
+    time.sleep(min(2 ** max(0, restart_count - 1), 8))
     replacement = start_service(spec)
     replacement.restart_count = restart_count
     return replacement
@@ -618,17 +594,21 @@ def run_with_services(
     if not command:
         raise ValueError("foreground command is required")
     report = start_services(names, allow_degraded=allow_degraded)
-    environment = os.environ.copy()
-    process = subprocess.Popen(command, cwd=str(PROJECT_ROOT), env=environment)
     states = dict(report.services)
     specs = service_specs()
-    max_restarts = _int_env(
-        "AGENT_FORGE_SUPERVISOR_MAX_RESTARTS", DEFAULT_MAX_RESTARTS
-    )
-    monitor_seconds = _float_env(
-        "AGENT_FORGE_SUPERVISOR_MONITOR_SECONDS", DEFAULT_MONITOR_SECONDS
-    )
+    process: Optional[subprocess.Popen] = None
     try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(PROJECT_ROOT),
+            env=os.environ.copy(),
+        )
+        max_restarts = _int_env(
+            "AGENT_FORGE_SUPERVISOR_MAX_RESTARTS", DEFAULT_MAX_RESTARTS
+        )
+        monitor_seconds = _float_env(
+            "AGENT_FORGE_SUPERVISOR_MONITOR_SECONDS", DEFAULT_MONITOR_SECONDS
+        )
         while process.poll() is None:
             time.sleep(monitor_seconds)
             for name, state in list(states.items()):
@@ -655,7 +635,7 @@ def run_with_services(
             write_state(states)
         return int(process.returncode or 0)
     finally:
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             process.terminate()
         stop_services(states)
 
