@@ -1,42 +1,31 @@
+"""Dynamic prompt assembly with versioned automatic context loading.
+
+Priority order, highest to lowest:
+BASE > TASK > CONTEXT > PROFILE > EXAMPLE > EXTRA.
+
+``--pre-session`` refreshes project context signals, validates their project
+fingerprint, merges them with explicit ``--context`` values, and writes the
+result to ``AGENTS_COMPOSED.md``. Explicit contexts are ordered first and all
+context names are de-duplicated.
 """
-Prompt Composer — dynamic prompt assembly engine (v1.5 P0)
+from __future__ import annotations
 
-Assembly order (high priority overrides low):
-1. base.md             (always loaded, constitutional — Global invariants)
-2. tasks/{type}.md     (task-specific — Current task workflow)
-3. contexts/{ctx}.md   (project/framework first, then language — Project & Language context)
-4. profiles/{p}.md     (terse / detailed / socratic / default — Output profile)
-5. examples/{...}.md   (Few-Shot, P1)
-6. extra_instructions  (markconfig/profile.md — Local user profile)
-
-Priority invariant: lower-priority content MUST NOT override higher-priority
-content. The composed prompt emits an explicit priority declaration header
-so the model and reviewers can verify the order.
-
-CLI (must use -m form; direct script invocation fails on relative imports):
-    python -m modules.prompt.composer --pre-session
-    python -m modules.prompt.composer --task coding --profile terse
-    python -m modules.prompt.composer --list-tasks
-"""
 import argparse
-import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-# Project root: this file is at modules/prompt/composer.py
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = PROJECT_ROOT / ".opencode" / "prompts"
 RUNTIME_DIR = PROJECT_ROOT / "_runtime" / "prompt"
+CONTEXT_SIGNALS_PATH = RUNTIME_DIR / "context-signals.json"
 AGENTS_COMPOSED = PROJECT_ROOT / "AGENTS_COMPOSED.md"
 
 DEFAULT_PROFILE = "default"
-DEFAULT_TASK = None  # At session start, no task loaded; loaded on-demand during session
-VERSION = "1.6.0"
+DEFAULT_TASK = None
+VERSION = "1.7.0"
 
-# P4 fix: explicit priority ladder. Lower number = higher priority.
-# Lower-priority content MUST NOT contradict higher-priority content.
 PRIORITY_LADDER = [
     ("BASE", "Global invariants (constitutional, always loaded)"),
     ("TASK", "Current task workflow (coding/review/research/...)"),
@@ -48,88 +37,136 @@ PRIORITY_LADDER = [
 
 
 def _render_priority_header() -> str:
-    """Render the priority declaration block at the top of every composed prompt."""
     lines = [
         "# Prompt Priority Declaration",
         "",
         "Layers below are listed from HIGHEST to LOWEST priority. "
-        "Lower-priority content MUST NOT contradict or override "
-        "higher-priority content. When two layers conflict, the "
-        "higher-priority layer wins.",
+        "Lower-priority content MUST NOT contradict or override higher-priority "
+        "content. When two layers conflict, the higher-priority layer wins.",
         "",
     ]
-    for i, (label, desc) in enumerate(PRIORITY_LADDER, start=1):
-        lines.append(f"{i}. **{label}** — {desc}")
-    lines.append("")
-    lines.append(
-        "If you find a contradiction, resolve it in favor of the higher "
-        "layer and surface the conflict to the user rather than silently "
-        "picking one."
+    for index, (label, description) in enumerate(PRIORITY_LADDER, start=1):
+        lines.append(f"{index}. **{label}** — {description}")
+    lines.extend(
+        [
+            "",
+            "If you find a contradiction, resolve it in favor of the higher "
+            "layer and surface the conflict to the user rather than silently "
+            "picking one.",
+            "",
+        ]
     )
-    lines.append("")
     return "\n".join(lines)
 
 
-def load_prompt(path: Path) -> str:
-    """Load a prompt file, strip YAML frontmatter, return body only."""
-    if not path.exists():
-        return ""
-    content = path.read_text(encoding="utf-8")
-    return _strip_frontmatter(content)
-
-
-def load_with_metadata(path: Path) -> dict:
-    """Load a prompt file, return {content, metadata}."""
-    if not path.exists():
-        return {"content": "", "metadata": {}}
-    content = path.read_text(encoding="utf-8")
-    metadata = {}
-    body = content
-    if content.startswith("---"):
-        end = content.find("---", 3)
-        if end != -1:
-            frontmatter = content[3:end].strip()
-            body = content[end + 3:].lstrip()
-            metadata = _parse_simple_yaml(frontmatter)
-    return {"content": body, "metadata": metadata}
-
-
 def _strip_frontmatter(content: str) -> str:
-    """Remove YAML frontmatter (--- ... ---) from content."""
     if content.startswith("---"):
         end = content.find("---", 3)
         if end != -1:
-            return content[end + 3:].lstrip()
+            return content[end + 3 :].lstrip()
     return content
 
 
-def _relpath(path: Path) -> str:
-    """Return path relative to PROJECT_ROOT with forward slashes (cross-platform)."""
-    return str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
-
-
 def _parse_simple_yaml(text: str) -> dict:
-    """Parse simple 'key: value' YAML (no nesting, no PyYAML dependency)."""
-    result = {}
+    result: dict = {}
     for line in text.splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" not in line:
+        if not line or line.startswith("#") or ":" not in line:
             continue
         key, value = line.split(":", 1)
-        key = key.strip()
         value = value.strip()
-        # Strip quotes if present
-        if value.startswith('"') and value.endswith('"'):
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
             value = value[1:-1]
-        elif value.startswith("'") and value.endswith("'"):
-            value = value[1:-1]
-        # Parse list values: [a, b, c]
         if value.startswith("[") and value.endswith("]"):
-            value = [v.strip().strip('"\'') for v in value[1:-1].split(",") if v.strip()]
-        result[key] = value
+            value = [
+                item.strip().strip("\"'")
+                for item in value[1:-1].split(",")
+                if item.strip()
+            ]
+        result[key.strip()] = value
     return result
+
+
+def load_prompt(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    return _strip_frontmatter(path.read_text(encoding="utf-8"))
+
+
+def load_with_metadata(path: Path) -> dict:
+    if not path.is_file():
+        return {"content": "", "metadata": {}}
+    content = path.read_text(encoding="utf-8")
+    if not content.startswith("---"):
+        return {"content": content, "metadata": {}}
+    end = content.find("---", 3)
+    if end == -1:
+        return {"content": content, "metadata": {}}
+    return {
+        "content": content[end + 3 :].lstrip(),
+        "metadata": _parse_simple_yaml(content[3:end].strip()),
+    }
+
+
+def _relpath(path: Path) -> str:
+    try:
+        relative = path.resolve().relative_to(PROJECT_ROOT.resolve())
+    except ValueError:
+        return str(path).replace("\\", "/")
+    return str(relative).replace("\\", "/")
+
+
+def _dedupe(items) -> list[str]:  # noqa: ANN001
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in items or []:
+        value = str(raw).strip()
+        if not value or value in seen:
+            continue
+        output.append(value)
+        seen.add(value)
+    return output
+
+
+def load_detected_contexts(
+    *,
+    refresh: bool = False,
+    signals_path: Path = CONTEXT_SIGNALS_PATH,
+    project_root: Path = PROJECT_ROOT,
+    prompts_dir: Path = PROMPTS_DIR,
+) -> tuple[list[str], dict]:
+    """Load fresh detected contexts and discard names without prompt files."""
+
+    from modules.prompt.context_state import load_context_state
+
+    payload = load_context_state(
+        path=signals_path,
+        project_root=project_root,
+        refresh=refresh,
+    )
+    available: list[str] = []
+    ignored: list[str] = []
+    for context in _dedupe(payload.get("contexts", [])):
+        if (prompts_dir / "contexts" / f"{context}.md").is_file():
+            available.append(context)
+        else:
+            ignored.append(context)
+    metadata = {
+        "schema_version": payload.get("schema_version"),
+        "project_fingerprint": payload.get("project_fingerprint"),
+        "detected_at": payload.get("detected_at"),
+        "ignored_contexts": ignored,
+    }
+    return available, metadata
+
+
+def resolve_contexts(
+    explicit_contexts: Optional[list[str]],
+    detected_contexts: Optional[list[str]],
+) -> list[str]:
+    """Merge contexts with explicit choices first and no duplicates."""
+
+    return _dedupe([*(explicit_contexts or []), *(detected_contexts or [])])
 
 
 def compose(
@@ -138,211 +175,167 @@ def compose(
     contexts: Optional[list] = None,
     examples: Optional[list] = None,
     extra_instructions: Optional[str] = None,
+    *,
+    use_detected_contexts: bool = False,
+    refresh_context_signals: bool = False,
+    signals_path: Path = CONTEXT_SIGNALS_PATH,
 ) -> dict:
-    """
-    Compose a complete system prompt.
+    """Compose a complete prompt using the declared priority ladder."""
 
-    Assembly order (HIGHEST → LOWEST priority; lower must not override higher):
-        1. BASE      — base.md (constitutional, always loaded)
-        2. TASK      — tasks/{task}.md (current task workflow)
-        3. CONTEXT   — contexts/{ctx}.md (project / framework / language)
-        4. PROFILE   — profiles/{profile}.md (output style)
-        5. EXAMPLE   — examples/{ex}.md (few-shot)
-        6. EXTRA     — extra_instructions (local user profile)
+    detected_contexts: list[str] = []
+    detection_metadata: dict = {}
+    if use_detected_contexts:
+        detected_contexts, detection_metadata = load_detected_contexts(
+            refresh=refresh_context_signals,
+            signals_path=signals_path,
+            project_root=PROJECT_ROOT,
+            prompts_dir=PROMPTS_DIR,
+        )
+    resolved_contexts = resolve_contexts(contexts, detected_contexts)
+    resolved_examples = _dedupe(examples)
 
-    Returns:
-        {
-            "prompt": str,           # composed full prompt
-            "sources": list[str],    # loaded file paths (relative to PROJECT_ROOT)
-            "metadata": dict,        # version, timestamp, profile, task, contexts, examples
-            "priority_ladder": list, # P4: explicit priority declaration
-        }
-    """
-    sources = []
-    parts = []
+    sources: list[str] = ["(inline) priority declaration"]
+    parts: list[str] = [
+        "# === PRIORITY DECLARATION ===\n\n" + _render_priority_header()
+    ]
 
-    # 0. Priority declaration header (P4 fix)
-    parts.append("# === PRIORITY DECLARATION ===\n\n" + _render_priority_header())
-    sources.append("(inline) priority declaration")
-
-    # 1. Base (always loaded) — HIGHEST priority
     base_path = PROMPTS_DIR / "base.md"
-    base = load_prompt(base_path)
-    if base:
+    if base := load_prompt(base_path):
         parts.append("# === BASE (Constitutional Layer) ===\n\n" + base)
         sources.append(_relpath(base_path))
 
-    # 2. Task — current task workflow
     if task:
         task_path = PROMPTS_DIR / "tasks" / f"{task}.md"
-        task_content = load_prompt(task_path)
-        if task_content:
-            parts.append(f"# === TASK: {task} ===\n\n" + task_content)
+        if task_content := load_prompt(task_path):
+            parts.append(f"# === TASK: {task} ===\n\n{task_content}")
             sources.append(_relpath(task_path))
 
-    # 3. Contexts (multiple allowed) — project / framework / language
-    if contexts:
-        for ctx in contexts:
-            ctx_path = PROMPTS_DIR / "contexts" / f"{ctx}.md"
-            ctx_content = load_prompt(ctx_path)
-            if ctx_content:
-                parts.append(f"# === CONTEXT: {ctx} ===\n\n" + ctx_content)
-                sources.append(_relpath(ctx_path))
+    loaded_contexts: list[str] = []
+    for context in resolved_contexts:
+        context_path = PROMPTS_DIR / "contexts" / f"{context}.md"
+        if context_content := load_prompt(context_path):
+            parts.append(f"# === CONTEXT: {context} ===\n\n{context_content}")
+            sources.append(_relpath(context_path))
+            loaded_contexts.append(context)
 
-    # 4. Profile — output style
     profile_path = PROMPTS_DIR / "profiles" / f"{profile}.md"
-    profile_content = load_prompt(profile_path)
-    if profile_content:
-        parts.append(f"# === PROFILE: {profile} ===\n\n" + profile_content)
+    if profile_content := load_prompt(profile_path):
+        parts.append(f"# === PROFILE: {profile} ===\n\n{profile_content}")
         sources.append(_relpath(profile_path))
 
-    # 5. Examples (P1 feature)
-    if examples:
-        for ex in examples:
-            ex_path = PROMPTS_DIR / "examples" / f"{ex}.md"
-            ex_content = load_prompt(ex_path)
-            if ex_content:
-                parts.append(f"# === EXAMPLE: {ex} ===\n\n" + ex_content)
-                sources.append(_relpath(ex_path))
+    loaded_examples: list[str] = []
+    for example in resolved_examples:
+        example_path = PROMPTS_DIR / "examples" / f"{example}.md"
+        if example_content := load_prompt(example_path):
+            parts.append(f"# === EXAMPLE: {example} ===\n\n{example_content}")
+            sources.append(_relpath(example_path))
+            loaded_examples.append(example)
 
-    # 6. Extra instructions (e.g., user profile from markconfig/profile.md)
     if extra_instructions:
         parts.append("# === EXTRA (User Profile) ===\n\n" + extra_instructions)
         sources.append("markconfig/profile.md")
 
-    prompt = "\n\n---\n\n".join(parts)
-
+    composed_at = datetime.now(timezone.utc).isoformat()
     return {
-        "prompt": prompt,
+        "prompt": "\n\n---\n\n".join(parts),
         "sources": sources,
         "metadata": {
             "version": VERSION,
-            "composed_at": datetime.now().isoformat(),
+            "composed_at": composed_at,
             "profile": profile,
             "task": task,
-            "contexts": contexts or [],
-            "examples": examples or [],
+            "contexts": loaded_contexts,
+            "explicit_contexts": _dedupe(contexts),
+            "detected_contexts": detected_contexts,
+            "context_detection": detection_metadata,
+            "examples": loaded_examples,
         },
         "priority_ladder": [
-            {"layer": label, "description": desc, "priority": i}
-            for i, (label, desc) in enumerate(PRIORITY_LADDER, start=1)
+            {"layer": label, "description": description, "priority": index}
+            for index, (label, description) in enumerate(PRIORITY_LADDER, start=1)
         ],
     }
 
 
 def write_composed(result: dict, output_path: Path = AGENTS_COMPOSED) -> None:
-    """Write the composed prompt to a file with metadata header."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     header = (
-        f"<!-- Auto-generated by modules/prompt/composer.py at "
+        "<!-- Auto-generated by modules/prompt/composer.py at "
         f"{result['metadata']['composed_at']} -->\n"
         f"<!-- Sources: {', '.join(result['sources'])} -->\n"
         f"<!-- Version: {result['metadata']['version']} -->\n\n"
     )
-    output_path.write_text(header + result["prompt"], encoding="utf-8")
+    temporary = output_path.with_suffix(output_path.suffix + ".tmp")
+    temporary.write_text(header + result["prompt"], encoding="utf-8")
+    temporary.replace(output_path)
 
 
-def list_tasks() -> list:
-    """Return list of available task prompt names."""
-    tasks_dir = PROMPTS_DIR / "tasks"
-    if not tasks_dir.exists():
+def list_tasks() -> list[str]:
+    directory = PROMPTS_DIR / "tasks"
+    return sorted(path.stem for path in directory.glob("*.md")) if directory.exists() else []
+
+
+def list_profiles() -> list[str]:
+    directory = PROMPTS_DIR / "profiles"
+    return sorted(path.stem for path in directory.glob("*.md")) if directory.exists() else []
+
+
+def list_contexts() -> list[str]:
+    directory = PROMPTS_DIR / "contexts"
+    return sorted(path.stem for path in directory.glob("*.md")) if directory.exists() else []
+
+
+def list_examples() -> list[str]:
+    directory = PROMPTS_DIR / "examples"
+    if not directory.exists():
         return []
-    return sorted(f.stem for f in tasks_dir.glob("*.md"))
-
-
-def list_profiles() -> list:
-    """Return list of available profile names."""
-    profiles_dir = PROMPTS_DIR / "profiles"
-    if not profiles_dir.exists():
-        return []
-    return sorted(f.stem for f in profiles_dir.glob("*.md"))
-
-
-def list_contexts() -> list:
-    """Return list of available context names."""
-    contexts_dir = PROMPTS_DIR / "contexts"
-    if not contexts_dir.exists():
-        return []
-    return sorted(f.stem for f in contexts_dir.glob("*.md"))
-
-
-def list_examples() -> list:
-    """Return list of available example names (relative path stems, e.g., 'python/test-driven')."""
-    examples_dir = PROMPTS_DIR / "examples"
-    if not examples_dir.exists():
-        return []
-    result = []
-    for f in examples_dir.rglob("*.md"):
-        rel = f.relative_to(examples_dir)
-        # Convert OS path separators to forward slashes
-        result.append(str(rel.with_suffix("")).replace("\\", "/"))
-    return sorted(result)
+    return sorted(
+        str(path.relative_to(directory).with_suffix("")).replace("\\", "/")
+        for path in directory.rglob("*.md")
+    )
 
 
 def _load_user_profile() -> Optional[str]:
-    """Load user profile from markconfig/profile.md as extra instructions."""
-    profile_path = PROJECT_ROOT / "markconfig" / "profile.md"
-    if profile_path.exists():
-        return profile_path.read_text(encoding="utf-8")
-    return None
+    path = PROJECT_ROOT / "markconfig" / "profile.md"
+    return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Prompt Composer (v1.5)")
-    parser.add_argument("--pre-session", action="store_true",
-                        help="Pre-session composition for AGENTS_COMPOSED.md")
-    parser.add_argument("--task", type=str, default=None,
-                        help="Task type: coding|review|research|debugging|planning|writing|automation")
-    parser.add_argument("--profile", type=str, default=DEFAULT_PROFILE,
-                        help="Profile: default|terse|detailed|socratic")
-    parser.add_argument("--context", action="append", default=[],
-                        help="Context (can be repeated): python|typescript|secrets|memory|...")
-    parser.add_argument("--example", action="append", default=[],
-                        help="Example (can be repeated)")
-    parser.add_argument("--list-tasks", action="store_true",
-                        help="List available task prompts")
-    parser.add_argument("--list-profiles", action="store_true",
-                        help="List available profiles")
-    parser.add_argument("--list-contexts", action="store_true",
-                        help="List available contexts")
-    parser.add_argument("--list-examples", action="store_true",
-                        help="List available examples")
-    parser.add_argument("--output", type=str, default=None,
-                        help="Output file path (default: stdout for non-pre-session, AGENTS_COMPOSED.md for --pre-session)")
+    parser = argparse.ArgumentParser(description="Prompt Composer")
+    parser.add_argument("--pre-session", action="store_true")
+    parser.add_argument("--task", default=None)
+    parser.add_argument("--profile", default=DEFAULT_PROFILE)
+    parser.add_argument("--context", action="append", default=[])
+    parser.add_argument("--example", action="append", default=[])
+    parser.add_argument("--list-tasks", action="store_true")
+    parser.add_argument("--list-profiles", action="store_true")
+    parser.add_argument("--list-contexts", action="store_true")
+    parser.add_argument("--list-examples", action="store_true")
+    parser.add_argument("--output", default=None)
     args = parser.parse_args(argv)
 
-    if args.list_tasks:
-        for t in list_tasks():
-            print(t)
-        return 0
-
-    if args.list_profiles:
-        for p in list_profiles():
-            print(p)
-        return 0
-
-    if args.list_contexts:
-        for c in list_contexts():
-            print(c)
-        return 0
-
-    if args.list_examples:
-        for e in list_examples():
-            print(e)
-        return 0
-
-    # Load user profile as extra instructions
-    extra = _load_user_profile()
+    listing = (
+        (args.list_tasks, list_tasks),
+        (args.list_profiles, list_profiles),
+        (args.list_contexts, list_contexts),
+        (args.list_examples, list_examples),
+    )
+    for enabled, function in listing:
+        if enabled:
+            for item in function():
+                print(item)
+            return 0
 
     result = compose(
         profile=args.profile,
         task=args.task,
-        contexts=args.context or None,
-        examples=args.example or None,
-        extra_instructions=extra,
+        contexts=args.context,
+        examples=args.example,
+        extra_instructions=_load_user_profile(),
+        use_detected_contexts=args.pre_session,
+        refresh_context_signals=args.pre_session,
     )
 
-    # Lazy import to avoid circular dependency
     from .log import log_composition, write_version_snapshot
 
     if args.pre_session:
@@ -358,7 +351,6 @@ def main(argv=None) -> int:
     else:
         print(result["prompt"])
         log_composition(result["metadata"])
-
     return 0
 
 
