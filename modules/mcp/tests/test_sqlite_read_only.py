@@ -59,7 +59,11 @@ def test_read_only_query_rejects_writes_and_state_changes(
 ) -> None:
     client = SQLiteClient(str(database))
 
-    with pytest.raises(sqlite3.DatabaseError):
+    # Explicit statements preserve the historical ValueError contract, while
+    # statements detected by SQLite's authorizer may surface DatabaseError.
+    # Both are fail-closed rejection paths; database immutability is the
+    # security invariant asserted below.
+    with pytest.raises((ValueError, sqlite3.DatabaseError)):
         client.query(statement)
 
     assert _names(database) == ["alpha", "beta"]
@@ -77,7 +81,7 @@ def test_query_rejects_multiple_statements(database: Path) -> None:
 def test_query_on_writable_client_is_still_read_only(database: Path) -> None:
     client = SQLiteClient(str(database), writable=True)
 
-    with pytest.raises(sqlite3.DatabaseError):
+    with pytest.raises((ValueError, sqlite3.DatabaseError)):
         client.query("UPDATE items SET name = 'changed'")
 
     assert _names(database) == ["alpha", "beta"]
