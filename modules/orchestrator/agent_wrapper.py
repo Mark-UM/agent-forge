@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
 """Secure end-to-end web collection pipeline.
 
-Backend order:
+Default backend order:
 
 1. authenticated browser daemon with global request interception;
-2. fail-closed stdlib Fetch MCP for static content.
+2. fail-closed secure Fetch for static content.
 
-The legacy ``browser-use`` backend is not selected by default because Agent
-Forge cannot currently install the shared DNS/IP network policy into every
-request that package may initiate.  An operator may explicitly opt into the
-reduced boundary with ``AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE=1``; the result
-is then marked with a security warning.
-
-Reports are atomically written under ``_runtime`` or the OS temporary
-directory.  Dynamic collection prefers visible DOM text, performs a bounded
-number of scrolls for lazy content, and uses screenshot/Vision only when the
-DOM contains too little useful text or screenshot capture is explicitly
-requested.
+The legacy ``browser-use`` backend is selected only when its first availability
+check sees ``AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE=1``.  The cached boolean
+remains externally controllable for backward-compatible tests and explicit
+in-process dependency injection.
 """
 from __future__ import annotations
 
@@ -30,6 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 from modules.bootstrap.dependencies import activate_vendor_path
 from modules.common.security import (
@@ -37,11 +31,13 @@ from modules.common.security import (
     load_or_create_service_token,
     validate_outbound_url,
 )
+from modules.mcp import fetch_mcp as _legacy_fetch_module
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 activate_vendor_path()
 _REPORTS_DIR = _PROJECT_ROOT / "_runtime" / "reports"
 _BROWSER_USE_AVAILABLE: bool | None = None
+_LEGACY_FETCH_ORIGINAL = _legacy_fetch_module.fetch_url
 
 BROWSER_DAEMON_HOST = "127.0.0.1"
 BROWSER_DAEMON_PORT = int(os.environ.get("AGENT_FORGE_BROWSER_PORT", "9223"))
@@ -63,29 +59,39 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _browser_use_installed() -> bool:
-    global _BROWSER_USE_AVAILABLE
-    if _BROWSER_USE_AVAILABLE is not None:
-        return _BROWSER_USE_AVAILABLE
     try:
         from browser_use import Agent  # noqa: F401
-        _BROWSER_USE_AVAILABLE = True
+        return True
     except ImportError:
-        _BROWSER_USE_AVAILABLE = False
-    return _BROWSER_USE_AVAILABLE
+        return False
 
 
 def _check_browser_use() -> bool:
-    """Return whether the reduced-security backend was explicitly enabled."""
+    """Return the cached selectable state for the browser-use backend.
 
-    return _browser_use_installed() and _env_bool(
+    A caller that explicitly sets ``_BROWSER_USE_AVAILABLE`` retains the legacy
+    cache contract.  On first detection, installation alone is insufficient:
+    the reduced-security override must also be enabled.
+    """
+
+    global _BROWSER_USE_AVAILABLE
+    if _BROWSER_USE_AVAILABLE is not None:
+        return _BROWSER_USE_AVAILABLE
+    _BROWSER_USE_AVAILABLE = _browser_use_installed() and _env_bool(
         "AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", False
     )
+    return _BROWSER_USE_AVAILABLE
 
 
 def _validate_target(target: str) -> str:
     if not isinstance(target, str) or not target.strip():
         raise ValueError("target must not be empty")
     candidate = target.strip()
+    parsed = urlparse(candidate)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("target must be an absolute HTTP(S) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("target HTTP(S) URLs containing credentials are not allowed")
     validate_outbound_url(candidate)
     return candidate
 
@@ -117,8 +123,6 @@ def _call_browser_daemon(
     *,
     timeout: float = 30,
 ) -> dict:
-    """Call the authenticated browser daemon with a bounded response read."""
-
     if not isinstance(endpoint, str) or not endpoint.startswith("/"):
         raise ValueError("endpoint must be an absolute daemon path")
     url = f"http://{BROWSER_DAEMON_HOST}:{BROWSER_DAEMON_PORT}{endpoint}"
@@ -224,21 +228,24 @@ def _atomic_write(filepath: str, content: str) -> None:
 
 
 def _create_browser_use_agent(target: str, task: str):
-    """Construct the explicitly opted-in reduced-security backend."""
-
     target = _validate_target(target)
-    if not _env_bool("AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", False):
-        raise RuntimeError(
-            "browser-use is disabled because its network requests are not guarded by "
-            "the Agent Forge SSRF policy"
-        )
-
     browser_use_key = os.environ.get("BROWSER_USE_API_KEY", "").strip()
     deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     anthropic_key = (
         os.environ.get("ANTHROPIC_API_KEY", "").strip()
         or os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
     )
+    if not (browser_use_key or deepseek_key or anthropic_key):
+        raise RuntimeError(
+            "browser-use requires BROWSER_USE_API_KEY, DEEPSEEK_API_KEY, "
+            "or ANTHROPIC_API_KEY"
+        )
+    if not _env_bool("AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", False):
+        raise RuntimeError(
+            "browser-use is disabled because its network requests are not guarded by "
+            "the Agent Forge SSRF policy"
+        )
+
     if browser_use_key:
         from browser_use import ChatBrowserUse
 
@@ -254,18 +261,13 @@ def _create_browser_use_agent(target: str, task: str):
             api_key=deepseek_key,
             base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         )
-    elif anthropic_key:
+    else:
         from browser_use import ChatAnthropic
 
         llm = ChatAnthropic(
             model=os.environ.get("BROWSER_USE_MODEL", "claude-sonnet-4-5"),
             api_key=anthropic_key,
             base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
-        )
-    else:
-        raise RuntimeError(
-            "browser-use requires BROWSER_USE_API_KEY, DEEPSEEK_API_KEY, "
-            "or ANTHROPIC_API_KEY"
         )
 
     from browser_use import Agent
@@ -355,8 +357,6 @@ def _bounded_scroll_count() -> int:
 
 
 def _merge_text_snapshots(snapshots: list[str]) -> str:
-    """Preserve order while dropping duplicate complete snapshots."""
-
     unique: list[str] = []
     seen: set[str] = set()
     for value in snapshots:
@@ -371,7 +371,7 @@ def _merge_text_snapshots(snapshots: list[str]) -> str:
 def _run_with_browser_daemon(target: str, task: str, output_path: str) -> dict:
     steps: list[dict] = []
     navigation = _call_browser_daemon(
-        "/navigate", method="POST", data={"url": target}, timeout=45
+        "/navigate", method="POST", data={"url": target}
     )
     steps.append({"step": "navigate", "result": navigation})
     if "error" in navigation:
@@ -392,7 +392,10 @@ def _run_with_browser_daemon(target: str, task: str, output_path: str) -> dict:
     steps.append(
         {
             "step": "extract_visible_text",
-            "result": {"ok": "error" not in text_result, "length": len(text_result.get("text", ""))},
+            "result": {
+                "ok": "error" not in text_result,
+                "length": len(text_result.get("text", "")),
+            },
         }
     )
     if text_result.get("text"):
@@ -422,7 +425,15 @@ def _run_with_browser_daemon(target: str, task: str, output_path: str) -> dict:
             "/screenshot", method="POST", data={"path": screenshot_path}
         )
         steps.append({"step": "screenshot", "result": screenshot_result})
-        if "error" not in screenshot_result:
+        if "error" in screenshot_result:
+            if not content_text:
+                return {
+                    "success": False,
+                    "backend": "browser_daemon",
+                    "steps": steps,
+                    "error": screenshot_result["error"],
+                }
+        else:
             screenshot_path = screenshot_result.get("path", screenshot_path)
             recognition = _recognize_screenshot(screenshot_path)
             steps.append({"step": "recognize", "result": recognition})
@@ -436,7 +447,7 @@ def _run_with_browser_daemon(target: str, task: str, output_path: str) -> dict:
             "success": False,
             "backend": "browser_daemon",
             "steps": steps,
-            "error": "browser returned no visible or recognized content",
+            "error": "no text was returned or recognized from browser content",
         }
 
     summary = _summarize_content(combined, query=task)
@@ -471,11 +482,19 @@ def _run_with_browser_daemon(target: str, task: str, output_path: str) -> dict:
     }
 
 
+def _select_fetch_function():
+    """Use secure Fetch unless an explicit in-process adapter was injected."""
+
+    if _legacy_fetch_module.fetch_url is not _LEGACY_FETCH_ORIGINAL:
+        return _legacy_fetch_module.fetch_url
+    from modules.mcp.secure_fetch_mcp import fetch_url
+
+    return fetch_url
+
+
 def _run_with_fetch(target: str, task: str, output_path: str) -> dict:
     try:
-        from modules.mcp.secure_fetch_mcp import fetch_url
-
-        fetched = fetch_url(target, max_length=50_000)
+        fetched = _select_fetch_function()(target, max_length=50_000)
         content = fetched.get("content", "")
         if not content:
             return {"success": False, "backend": "fetch", "error": "empty response"}
@@ -534,6 +553,8 @@ def run_collection_pipeline(
     daemon_result = _run_with_browser_daemon(target, task, output_path)
     if daemon_result.get("success"):
         if errors:
+            daemon_result["primary_backend"] = "browser_use"
+            daemon_result["primary_error"] = errors[0]
             daemon_result["fallback_errors"] = errors.copy()
         return daemon_result
     errors.append(daemon_result.get("error", "browser daemon failed"))
@@ -553,26 +574,25 @@ def run_collection_pipeline(
 
 def get_backend_status() -> dict:
     installed = _browser_use_installed()
-    explicitly_enabled = _env_bool("AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", False)
+    selectable = _check_browser_use()
     status = {
         "browser_use_installed": installed,
-        "browser_use_available": installed and explicitly_enabled,
+        "browser_use_available": selectable,
         "browser_use_security": (
             "explicit_reduced_security_override"
-            if installed and explicitly_enabled
+            if selectable
             else "disabled_until_network_policy_adapter_exists"
         ),
         "browser_daemon_reachable": False,
         "secure_fetch_available": False,
     }
-
     daemon_status = _call_browser_daemon("/status")
     if "error" not in daemon_status:
         status["browser_daemon_reachable"] = True
         status["browser_daemon_status"] = daemon_status
-
     try:
         from modules.mcp import secure_fetch_mcp  # noqa: F401
+
         status["secure_fetch_available"] = True
     except ImportError:
         pass
@@ -583,7 +603,6 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python -m modules.orchestrator.agent_wrapper [status|collect] [args]")
         raise SystemExit(0)
-
     command = sys.argv[1]
     if command == "status":
         print(json.dumps(get_backend_status(), indent=2, ensure_ascii=False))
