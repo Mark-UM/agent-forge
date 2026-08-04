@@ -24,7 +24,7 @@ env:
 
 jobs:
   security-contracts:
-    name: Security contracts
+    name: Security and service contracts
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -44,7 +44,7 @@ jobs:
       - name: Compile first-party modules
         run: python -m compileall -q modules
 
-      - name: Run security regression tests
+      - name: Run security and service regression tests
         run: >-
           python -m pytest -q
           modules/common/tests/test_security.py
@@ -52,6 +52,7 @@ jobs:
           modules/mcp/tests/test_secure_fetch_mcp.py
           modules/browser/tests/test_daemon_security.py
           modules/orchestrator/tests/test_collection_security.py
+          modules/search/tests/test_hardened_service.py
 
   full-test-suite:
     name: Full suite (${{ matrix.os }})
