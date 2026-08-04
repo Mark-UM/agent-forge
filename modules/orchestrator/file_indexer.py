@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Root-safe ChromaDB file indexer.
+"""Root-safe ChromaDB file indexer with legacy compatibility.
 
-Documents from multiple directories may share one collection. Every document is
-owned by a stable canonical ``root_id`` and stale cleanup is restricted to that
-owner. If any upsert fails, cleanup is skipped for the entire indexing run.
+New records use stable ``root_id + relative_path`` ownership, so stale cleanup
+can never delete another indexed root.  Historical helper signatures and MD5
+record identifiers remain readable for incremental migration.
 """
 from __future__ import annotations
 
@@ -83,23 +83,45 @@ def document_identifier(root_id: str, relative_path: str) -> str:
     return hashlib.sha256(f"{root_id}:{normalized}".encode("utf-8")).hexdigest()[:32]
 
 
-def _scan_files(root: Path, patterns: list[str]) -> list[Path]:
+def _legacy_document_identifier(path: str | os.PathLike[str]) -> str:
+    return hashlib.md5(str(path).encode("utf-8")).hexdigest()[:16]
+
+
+def _scan_files(
+    root: str | os.PathLike[str], patterns: list[str]
+) -> list[str]:
+    """Return sorted absolute file names; missing roots produce an empty list."""
+
+    root_path = Path(root).expanduser()
+    if not root_path.is_dir():
+        return []
     files: set[Path] = set()
     for pattern in patterns:
-        for candidate in root.rglob(pattern):
+        for candidate in root_path.rglob(pattern):
             if candidate.is_file():
                 files.add(candidate.resolve())
-    return sorted(files, key=lambda path: path.as_posix().lower())
+    return [str(path) for path in sorted(files, key=lambda item: item.as_posix().lower())]
 
 
-def _read_file_content(path: Path, max_chars: int = 10_000) -> str:
+def _read_file_content(
+    path: str | os.PathLike[str], max_chars: int = 10_000
+) -> str:
     try:
-        return path.read_text(encoding="utf-8")[:max_chars]
+        return Path(path).read_text(encoding="utf-8")[:max_chars]
     except (UnicodeDecodeError, OSError):
         return ""
 
 
+def _file_hash(path: str | os.PathLike[str]) -> str:
+    """Historical content hash helper retained for callers and migrations."""
+
+    content = _read_file_content(path)
+    return hashlib.md5(content.encode("utf-8")).hexdigest()
+
+
 def _belongs_to_root(filepath: str, root: Path) -> bool:
+    if not filepath:
+        return False
     try:
         Path(filepath).expanduser().resolve().relative_to(root)
         return True
@@ -108,20 +130,18 @@ def _belongs_to_root(filepath: str, root: Path) -> bool:
 
 
 def _collection_rows(collection, *, root: Path, root_id: str) -> dict[str, dict]:
-    """Return only records owned by this root, including safe legacy matches."""
-
     data = None
     try:
         data = collection.get(where={"root_id": root_id})
     except Exception:
-        # Older Chroma versions/fakes may not support where on get(). Fall back
-        # to a full read but filter locally before any delete decision.
         try:
             data = collection.get()
         except Exception:
             return {}
-    ids = list((data or {}).get("ids", []) or [])
-    metadatas = list((data or {}).get("metadatas", []) or [])
+    if not isinstance(data, dict):
+        return {}
+    ids = list(data.get("ids", []) or [])
+    metadatas = list(data.get("metadatas", []) or [])
     rows: dict[str, dict] = {}
     for index, doc_id in enumerate(ids):
         metadata = metadatas[index] if index < len(metadatas) else {}
@@ -130,10 +150,21 @@ def _collection_rows(collection, *, root: Path, root_id: str) -> dict[str, dict]
         if owner == root_id:
             rows[str(doc_id)] = metadata
         elif not owner and _belongs_to_root(str(metadata.get("filepath", "")), root):
-            # Legacy records are adopted only when their filepath resolves
-            # beneath this exact canonical root.
             rows[str(doc_id)] = metadata
     return rows
+
+
+def _legacy_metadata(collection, path: Path) -> tuple[str, dict] | None:
+    legacy_id = _legacy_document_identifier(str(path))
+    try:
+        data = collection.get(ids=[legacy_id])
+    except Exception:
+        return None
+    if not isinstance(data, dict) or legacy_id not in (data.get("ids", []) or []):
+        return None
+    metadatas = data.get("metadatas", []) or []
+    metadata = metadatas[0] if metadatas and isinstance(metadatas[0], dict) else {}
+    return legacy_id, metadata
 
 
 def index_directory(
@@ -179,17 +210,30 @@ def index_directory(
     skipped = 0
     failed = 0
 
-    for path in files:
+    for raw_path in files:
+        path = Path(raw_path).resolve()
         relative_path = path.relative_to(root_path).as_posix()
         doc_id = document_identifier(root_id, relative_path)
         current_ids.add(doc_id)
         try:
             content = _read_file_content(path)
             content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            previous = existing.get(doc_id, {})
-            if incremental and previous.get("content_hash") == content_hash:
+            legacy_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+            previous = existing.get(doc_id)
+            legacy_record = None
+            if previous is None and incremental:
+                legacy_record = _legacy_metadata(collection, path)
+                if legacy_record is not None:
+                    legacy_id, previous = legacy_record
+                    current_ids.add(legacy_id)
+            previous = previous or {}
+            if incremental and previous.get("content_hash") in {
+                content_hash,
+                legacy_hash,
+            }:
                 skipped += 1
                 continue
+
             metadata = {
                 "filepath": str(path),
                 "root_id": root_id,
