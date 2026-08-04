@@ -1,10 +1,10 @@
 {
   "name": "scheduler",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Authenticated loopback scheduler with SQLite job and run persistence",
   "entrypoints": {
     "daemon": "python -m modules.scheduler.secure_daemon",
-    "health": "python -m modules.scheduler.secure_daemon --check"
+    "cli": "python -m modules.scheduler.secure_daemon --check"
   },
   "capabilities": [
     {
@@ -19,7 +19,10 @@
     }
   ],
   "dependencies": {
-    "required": ["Python standard library", "APScheduler==3.11.3"],
+    "required": [
+      "Python standard library",
+      "APScheduler==3.11.3"
+    ],
     "optional": []
   },
   "credentials": [
@@ -40,7 +43,11 @@
     {
       "type": "sqlite",
       "path": "_runtime/mcp-sqlite.db",
-      "tables": ["scheduler_jobs", "job_runs", "schema_migrations"],
+      "tables": [
+        "scheduler_jobs",
+        "job_runs",
+        "schema_migrations"
+      ],
       "description": "Single source of truth for scheduler jobs, executions and migration state"
     },
     {
