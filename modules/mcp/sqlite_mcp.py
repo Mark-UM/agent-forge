@@ -2,8 +2,9 @@
 """SQLite MCP server with fail-closed read-only enforcement.
 
 Read APIs use URI ``mode=ro``, ``PRAGMA query_only=ON``, a SQLite authorizer,
-and an early statement classifier for commands such as a no-op ``REINDEX``
-that SQLite may not send through the authorizer when no index exists.
+and an early statement classifier.  Security is enforced by SQLite; blocked
+writes are translated to the historical ``ValueError`` contract so existing
+library and MCP callers keep stable error handling.
 """
 from __future__ import annotations
 
@@ -23,12 +24,16 @@ except Exception:
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "sqlite-mcp"
-SERVER_VERSION = "1.1.1"
+SERVER_VERSION = "1.1.2"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = str(_PROJECT_ROOT / "_runtime" / "mcp-sqlite.db")
 MAX_ROWS = 1000
 MAX_SQL_CHARS = 200_000
+_READ_ONLY_MESSAGE = (
+    "Write operations (INSERT/UPDATE/DELETE/etc.) are not allowed in read-only "
+    "mode. Restart server with --writable to enable."
+)
 
 _WRITE_KEYWORDS = frozenset(
     {
@@ -38,60 +43,26 @@ _WRITE_KEYWORDS = frozenset(
         "RELEASE",
     }
 )
-
 _READ_ONLY_PRAGMAS = frozenset(
     {
-        "collation_list",
-        "compile_options",
-        "database_list",
-        "data_version",
-        "foreign_key_check",
-        "foreign_key_list",
-        "function_list",
-        "index_info",
-        "index_list",
-        "index_xinfo",
-        "integrity_check",
-        "module_list",
-        "pragma_list",
-        "query_only",
-        "quick_check",
-        "schema_version",
-        "table_info",
-        "table_list",
-        "table_xinfo",
+        "collation_list", "compile_options", "database_list", "data_version",
+        "foreign_key_check", "foreign_key_list", "function_list", "index_info",
+        "index_list", "index_xinfo", "integrity_check", "module_list",
+        "pragma_list", "query_only", "quick_check", "schema_version",
+        "table_info", "table_list", "table_xinfo",
     }
 )
-
 _DENIED_ACTION_NAMES = (
-    "SQLITE_ALTER_TABLE",
-    "SQLITE_ANALYZE",
-    "SQLITE_ATTACH",
-    "SQLITE_CREATE_INDEX",
-    "SQLITE_CREATE_TABLE",
-    "SQLITE_CREATE_TEMP_INDEX",
-    "SQLITE_CREATE_TEMP_TABLE",
-    "SQLITE_CREATE_TEMP_TRIGGER",
-    "SQLITE_CREATE_TEMP_VIEW",
-    "SQLITE_CREATE_TRIGGER",
-    "SQLITE_CREATE_VIEW",
-    "SQLITE_CREATE_VTABLE",
-    "SQLITE_DELETE",
-    "SQLITE_DETACH",
-    "SQLITE_DROP_INDEX",
-    "SQLITE_DROP_TABLE",
-    "SQLITE_DROP_TEMP_INDEX",
-    "SQLITE_DROP_TEMP_TABLE",
-    "SQLITE_DROP_TEMP_TRIGGER",
-    "SQLITE_DROP_TEMP_VIEW",
-    "SQLITE_DROP_TRIGGER",
-    "SQLITE_DROP_VIEW",
-    "SQLITE_DROP_VTABLE",
-    "SQLITE_INSERT",
-    "SQLITE_REINDEX",
-    "SQLITE_SAVEPOINT",
-    "SQLITE_TRANSACTION",
-    "SQLITE_UPDATE",
+    "SQLITE_ALTER_TABLE", "SQLITE_ANALYZE", "SQLITE_ATTACH",
+    "SQLITE_CREATE_INDEX", "SQLITE_CREATE_TABLE", "SQLITE_CREATE_TEMP_INDEX",
+    "SQLITE_CREATE_TEMP_TABLE", "SQLITE_CREATE_TEMP_TRIGGER",
+    "SQLITE_CREATE_TEMP_VIEW", "SQLITE_CREATE_TRIGGER", "SQLITE_CREATE_VIEW",
+    "SQLITE_CREATE_VTABLE", "SQLITE_DELETE", "SQLITE_DETACH",
+    "SQLITE_DROP_INDEX", "SQLITE_DROP_TABLE", "SQLITE_DROP_TEMP_INDEX",
+    "SQLITE_DROP_TEMP_TABLE", "SQLITE_DROP_TEMP_TRIGGER",
+    "SQLITE_DROP_TEMP_VIEW", "SQLITE_DROP_TRIGGER", "SQLITE_DROP_VIEW",
+    "SQLITE_DROP_VTABLE", "SQLITE_INSERT", "SQLITE_REINDEX",
+    "SQLITE_SAVEPOINT", "SQLITE_TRANSACTION", "SQLITE_UPDATE",
 )
 _DENIED_ACTIONS = frozenset(
     value
@@ -125,8 +96,6 @@ def _pragma_is_read_only(statement: str) -> bool:
     remainder = match.group(2).strip().rstrip(";").strip()
     if name not in _READ_ONLY_PRAGMAS:
         return False
-    # Parenthesized/table arguments are reads. Assignment-like syntax changes
-    # connection or database state and is never accepted through query().
     if remainder.startswith("="):
         return False
     if name == "query_only" and remainder:
@@ -134,15 +103,18 @@ def _pragma_is_read_only(statement: str) -> bool:
     return True
 
 
+def _raise_read_only_error() -> None:
+    raise ValueError(_READ_ONLY_MESSAGE)
+
+
 def _reject_obvious_state_change(statement: str) -> None:
-    stripped = statement.lstrip()
-    upper = stripped.upper()
+    upper = statement.lstrip().upper()
     if upper.startswith("PRAGMA"):
         if not _pragma_is_read_only(statement):
-            raise sqlite3.DatabaseError("not authorized")
+            _raise_read_only_error()
         return
     if any(upper.startswith(keyword) for keyword in _WRITE_KEYWORDS):
-        raise sqlite3.DatabaseError("not authorized")
+        _raise_read_only_error()
 
 
 def _read_only_authorizer(action, arg1, arg2, db_name, trigger_name):  # noqa: ANN001
@@ -153,8 +125,6 @@ def _read_only_authorizer(action, arg1, arg2, db_name, trigger_name):  # noqa: A
         pragma_name = (arg1 or "").lower()
         if pragma_name not in _READ_ONLY_PRAGMAS:
             return sqlite3.SQLITE_DENY
-        # Reading PRAGMA query_only is allowed; attempting to switch it off is
-        # rejected. SQLite supplies the assigned value through arg2.
         if pragma_name == "query_only" and arg2 not in (None, ""):
             return sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_OK
@@ -163,6 +133,14 @@ def _read_only_authorizer(action, arg1, arg2, db_name, trigger_name):  # noqa: A
         if function_name in _DANGEROUS_FUNCTIONS:
             return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK
+
+
+def _is_authorization_failure(exc: sqlite3.Error) -> bool:
+    message = str(exc).lower()
+    return any(
+        fragment in message
+        for fragment in ("not authorized", "readonly", "read-only", "attempt to write")
+    )
 
 
 class SQLiteClient:
@@ -201,7 +179,7 @@ class SQLiteClient:
     def _is_write_query(self, sql: str) -> bool:
         try:
             _reject_obvious_state_change(sql)
-        except sqlite3.DatabaseError:
+        except ValueError:
             return True
         return False
 
@@ -243,7 +221,12 @@ class SQLiteClient:
         _reject_obvious_state_change(statement)
         bound_params = [] if params is None else params
         with self._connect(read_only=True) as conn:
-            cursor = conn.execute(statement, bound_params)
+            try:
+                cursor = conn.execute(statement, bound_params)
+            except sqlite3.Error as exc:
+                if _is_authorization_failure(exc):
+                    _raise_read_only_error()
+                raise
             columns = [item[0] for item in cursor.description] if cursor.description else []
             retained: list[sqlite3.Row] = []
             total = 0
@@ -406,10 +389,22 @@ def _handle_request(request):  # noqa: ANN001
                 "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
             }
         return _tool_result(req_id, result)
-    except (ValueError, FileNotFoundError, sqlite3.Error) as exc:
+    except ValueError as exc:
         return _tool_result(
             req_id,
-            {"success": False, "error": f"{type(exc).__name__}: {exc}"},
+            {"success": False, "error": str(exc)},
+            error=True,
+        )
+    except FileNotFoundError as exc:
+        return _tool_result(
+            req_id,
+            {"success": False, "error": str(exc)},
+            error=True,
+        )
+    except sqlite3.Error as exc:
+        return _tool_result(
+            req_id,
+            {"success": False, "error": f"SQLite error: {exc}"},
             error=True,
         )
     except Exception as exc:
