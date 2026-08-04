@@ -1,12 +1,57 @@
 {
-  "module": "scheduler",
-  "version": "1.8.1",
-  "entry_point": "python -m modules.scheduler.daemon",
-  "bind": "127.0.0.1:9225",
-  "persistence": "_runtime/scheduler/jobs.json",
-  "dependencies": {
-    "required": ["Python standard library", "APScheduler==3.11.3"]
+  "name": "scheduler",
+  "version": "2.0.0",
+  "description": "Authenticated loopback scheduler with SQLite job and run persistence",
+  "entrypoints": {
+    "daemon": "python -m modules.scheduler.secure_daemon",
+    "health": "python -m modules.scheduler.secure_daemon --check"
   },
+  "capabilities": [
+    {
+      "name": "scheduler.cron",
+      "version": "2.0",
+      "description": "Persist and execute cron jobs with one authoritative JobRun per execution"
+    },
+    {
+      "name": "scheduler.manual-run",
+      "version": "2.0",
+      "description": "Trigger asynchronous manual runs and poll the same returned run_id"
+    }
+  ],
+  "dependencies": {
+    "required": ["Python standard library", "APScheduler==3.11.3"],
+    "optional": []
+  },
+  "credentials": [
+    {
+      "env": "AGENT_FORGE_SCHEDULER_TOKEN",
+      "required": false,
+      "description": "Optional explicit bearer token; a random local token is generated otherwise"
+    }
+  ],
+  "health_checks": [
+    {
+      "command": "python -m modules.scheduler.secure_daemon --check",
+      "description": "Verify scheduler dependencies, SQLite state and authenticated entry point",
+      "timeout": 30
+    }
+  ],
+  "storage": [
+    {
+      "type": "sqlite",
+      "path": "_runtime/mcp-sqlite.db",
+      "tables": ["scheduler_jobs", "job_runs", "schema_migrations"],
+      "description": "Single source of truth for scheduler jobs, executions and migration state"
+    },
+    {
+      "type": "secret-file",
+      "path": "_runtime/auth/scheduler.token",
+      "tables": [],
+      "description": "Generated daemon bearer token; never print its value"
+    }
+  ],
+  "experimental": false,
+  "bind": "127.0.0.1:9225",
   "job_types": {
     "file_reindex": "implemented",
     "report_collect": "implemented, subject to collection pipeline limitations",
@@ -15,5 +60,5 @@
     "memory_review": "implemented as a read-only explicit task scan and local report"
   },
   "fallback": "Without APScheduler the service reports degraded mode and refuses schedule creation rather than persisting false-active jobs",
-  "recovery": "Malformed jobs.json is moved to a timestamped .corrupt file; active jobs that cannot be restored are persisted with error status instead of remaining false-active"
+  "recovery": "Legacy jobs.json migration is idempotent; SQLite remains authoritative and failed job restoration is recorded as an error"
 }
