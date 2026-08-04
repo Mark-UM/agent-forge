@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Authenticated, loopback-only Playwright browser daemon.
 
-The daemon owns a browser process and exposes a deliberately small HTTP API on
-``127.0.0.1``.  Localhost binding is not treated as authentication: every
-request, including health checks and shutdown, requires a bearer token stored
-under ``_runtime/auth/browser.token`` or supplied through
-``AGENT_FORGE_BROWSER_TOKEN``.
+URL validation has two explicit layers:
 
-Every HTTP(S) navigation and subresource request is checked by the shared
-fail-closed network policy.  Service workers and WebSockets are disabled by
-default so they cannot bypass Playwright request routing.  Arbitrary JavaScript
-execution is also disabled unless the operator explicitly sets
-``AGENT_FORGE_BROWSER_ALLOW_JS=1``.
+* ``_validate_url`` preserves the historical credential-free HTTP(S) syntax
+  contract used by library callers;
+* ``_validate_public_url`` additionally applies the fail-closed DNS/IP policy.
+
+All real navigation and every Playwright subresource request use the public
+network boundary. Service workers and WebSockets are blocked by default, and
+all HTTP API endpoints require a bearer token.
 """
 from __future__ import annotations
 
@@ -20,7 +18,6 @@ import json
 import os
 import tempfile
 import time
-import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -48,22 +45,9 @@ MAX_JS_CODE_LENGTH = 100_000
 SAFE_LOCAL_RESOURCE_SCHEMES = frozenset({"about", "blob", "data"})
 BROWSER_ENDPOINTS = frozenset(
     {
-        "/navigate",
-        "/click",
-        "/type",
-        "/keys",
-        "/screenshot",
-        "/content",
-        "/text",
-        "/js",
-        "/title",
-        "/url",
-        "/back",
-        "/forward",
-        "/refresh",
-        "/wait",
-        "/scroll",
-        "/newtab",
+        "/navigate", "/click", "/type", "/keys", "/screenshot",
+        "/content", "/text", "/js", "/title", "/url", "/back",
+        "/forward", "/refresh", "/wait", "/scroll", "/newtab",
     }
 )
 
@@ -104,8 +88,6 @@ def _browser_engine() -> str:
 
 
 def browser_launch_options() -> tuple[Path, dict]:
-    """Return the state directory and bounded Playwright launch options."""
-
     profile = Path(
         os.environ.get("AGENT_FORGE_BROWSER_PROFILE", str(DEFAULT_PROFILE_DIR))
     ).expanduser().resolve()
@@ -138,6 +120,33 @@ def _page_is_usable(page) -> bool:
         return False
 
 
+def _validate_url(url: str) -> str:
+    """Validate only credential-free absolute HTTP(S) syntax.
+
+    This intentionally accepts literal loopback hosts for backward-compatible
+    parsing. Real browser traffic must call ``_validate_public_url`` or pass
+    through ``_guard_network_route`` before a connection is made.
+    """
+
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("URL must not be empty")
+    candidate = url.strip()
+    parsed = urlparse(candidate)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("URL scheme must be http or https")
+    if not parsed.hostname:
+        raise ValueError("URL must include a hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URLs containing credentials are not allowed")
+    return candidate
+
+
+def _validate_public_url(url: str) -> str:
+    candidate = _validate_url(url)
+    validate_outbound_url(candidate)
+    return candidate
+
+
 def _record_blocked_request(url: str, reason: str) -> None:
     parsed = urlparse(url)
     safe_target = f"{parsed.scheme}://{parsed.hostname or ''}"
@@ -153,15 +162,13 @@ def _record_blocked_request(url: str, reason: str) -> None:
 
 
 def _guard_network_route(route, request) -> None:  # noqa: ANN001
-    """Validate every browser request before allowing it to continue."""
-
     url = request.url
     parsed = urlparse(url)
     if parsed.scheme.lower() in SAFE_LOCAL_RESOURCE_SCHEMES:
         route.continue_()
         return
     try:
-        validate_outbound_url(url)
+        _validate_public_url(url)
     except (UnsafeNetworkTarget, ValueError) as exc:
         _record_blocked_request(url, str(exc))
         route.abort("blockedbyclient")
@@ -171,9 +178,6 @@ def _guard_network_route(route, request) -> None:  # noqa: ANN001
 
 def _install_browser_network_guards(context) -> None:  # noqa: ANN001
     context.route("**/*", _guard_network_route)
-    # Playwright routing cannot reliably abort WebSocket handshakes.  Block the
-    # constructor in every frame unless the operator explicitly accepts that
-    # reduced isolation boundary.
     if not _env_bool("AGENT_FORGE_BROWSER_ALLOW_WEBSOCKETS", False):
         context.add_init_script(
             """
@@ -186,8 +190,6 @@ def _install_browser_network_guards(context) -> None:  # noqa: ANN001
 
 
 def get_or_start_browser():
-    """Start the configured browser with restorable state or return its page."""
-
     global _playwright, _browser, _context, _page
     if _page_is_usable(_page):
         return _page
@@ -213,8 +215,6 @@ def get_or_start_browser():
 
 
 def close_browser() -> None:
-    """Persist web state and close all browser resources."""
-
     global _playwright, _browser, _context, _page
     if _context is not None:
         try:
@@ -243,14 +243,6 @@ def close_browser() -> None:
     _context = None
     _browser = None
     _playwright = None
-
-
-def _validate_url(url: str) -> str:
-    if not isinstance(url, str) or not url.strip():
-        raise ValueError("URL must not be empty")
-    candidate = url.strip()
-    validate_outbound_url(candidate)
-    return candidate
 
 
 def _screenshot_allowed_dirs() -> tuple[Path, ...]:
@@ -317,11 +309,11 @@ class Handler(BaseHTTPRequestHandler):
     def _require_auth(self) -> bool:
         if bearer_token_matches(self.headers.get("Authorization"), _get_service_token()):
             return True
+        payload = b'{"ok":false,"error":"authentication required"}'
         self.send_response(401)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("WWW-Authenticate", 'Bearer realm="agent-forge-browser"')
         self.send_header("Cache-Control", "no-store")
-        payload = b'{"ok":false,"error":"authentication required"}'
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -363,9 +355,7 @@ class Handler(BaseHTTPRequestHandler):
                         "auth_required": True,
                         "token_fingerprint": token_fingerprint(_get_service_token()),
                         "javascript_enabled": _env_bool("AGENT_FORGE_BROWSER_ALLOW_JS", False),
-                        "websockets_enabled": _env_bool(
-                            "AGENT_FORGE_BROWSER_ALLOW_WEBSOCKETS", False
-                        ),
+                        "websockets_enabled": _env_bool("AGENT_FORGE_BROWSER_ALLOW_WEBSOCKETS", False),
                         "blocked_request_count": len(_blocked_requests),
                         "recent_blocked_requests": list(_blocked_requests)[-10:],
                     }
@@ -391,11 +381,9 @@ class Handler(BaseHTTPRequestHandler):
 
             page = get_or_start_browser()
             if path == "/navigate":
-                target = _validate_url(body.get("url", ""))
+                target = _validate_public_url(body.get("url", ""))
                 page.goto(target, wait_until="domcontentloaded", timeout=30_000)
-                # The route guard checks every redirect.  Validate the final URL
-                # again so an unexpected browser-internal transition fails closed.
-                _validate_url(page.url)
+                _validate_public_url(page.url)
                 result = {"ok": True, "url": page.url, "title": page.title()}
             elif path == "/click":
                 selector = _validate_selector(body.get("selector"))
@@ -436,17 +424,17 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/back":
                 page.go_back(wait_until="domcontentloaded")
                 if page.url and page.url != "about:blank":
-                    _validate_url(page.url)
+                    _validate_public_url(page.url)
                 result = {"ok": True, "url": page.url}
             elif path == "/forward":
                 page.go_forward(wait_until="domcontentloaded")
                 if page.url and page.url != "about:blank":
-                    _validate_url(page.url)
+                    _validate_public_url(page.url)
                 result = {"ok": True, "url": page.url}
             elif path == "/refresh":
                 page.reload(wait_until="domcontentloaded")
                 if page.url and page.url != "about:blank":
-                    _validate_url(page.url)
+                    _validate_public_url(page.url)
                 result = {"ok": True, "url": page.url}
             elif path == "/wait":
                 selector = _validate_selector(body.get("selector"))
@@ -468,7 +456,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(result)
         except (TypeError, ValueError, UnsafeNetworkTarget) as exc:
             self._send_json(
-                {"ok": False, "error": f"input or network policy failed: {exc}"}, 400
+                {"ok": False, "error": f"input or network policy failed: {exc}"},
+                400,
             )
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, 500)
@@ -494,9 +483,8 @@ def _find_existing_daemon() -> bool:
 
 
 def _send_http(method: str, path: str, data: dict | None = None) -> dict:
-    url = f"http://{DAEMON_HOST}:{DAEMON_PORT}{path}"
     request = urllib.request.Request(
-        url,
+        f"http://{DAEMON_HOST}:{DAEMON_PORT}{path}",
         data=json.dumps(data or {}).encode("utf-8") if method == "POST" else None,
         headers=_authorization_headers(),
         method=method,
