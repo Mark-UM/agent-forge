@@ -1,40 +1,76 @@
 {
-  "module": "search",
-  "version": "4.4.0",
-  "description": "Search privacy, history/cache, planning, scoring, aggregation, academic MCP, and callback-based orchestration utilities",
-  "components": [
-    "aggregator.py",
-    "arxiv_mcp.py",
-    "export.py",
-    "i18n.py",
-    "orchestrator.py",
-    "parallel.py",
-    "planner.py",
-    "prewarm.py",
-    "privacy.py",
-    "quality.py",
-    "search.py",
-    "semantic.py",
-    "semantic_scholar_mcp.py",
-    "serper_mcp.py",
-    "stream.py",
-    "summarize.py",
-    "verifier.py"
-  ],
-  "configured_mcp_servers": ["serper", "arxiv", "semantic_scholar"],
-  "runtime_outputs": [
-    "_runtime/search/search_history.YYYY-MM-DD.jsonl",
-    "_runtime/search/cache.json",
-    "_runtime/search/quality_cache.json",
-    "_runtime/search/chroma/"
+  "name": "search",
+  "version": "4.5.0",
+  "description": "Unified privacy-aware Search Service with mode-aware provider fallback, truthful output usability, verification, ranking, aggregation, and bounded caches",
+  "entrypoints": {
+    "mcp": "python -m modules.search.pipeline_mcp serve",
+    "cli": "python -m modules.search.search"
+  },
+  "capabilities": [
+    {
+      "name": "search.pipeline",
+      "version": "2.0",
+      "description": "Canonical SearchService pipeline shared by MCP, CLI, and library callers"
+    },
+    {
+      "name": "search.provider_fallback",
+      "version": "1.0",
+      "description": "Mode-aware provider availability, fallback, and observable execution outcomes"
+    },
+    {
+      "name": "search.academic",
+      "version": "1.0",
+      "description": "Academic-first search using arXiv and Semantic Scholar adapters"
+    }
   ],
   "dependencies": {
-    "required": ["Python standard library"],
-    "optional": ["chromadb", "DeepSeek API key", "SERPER_API_KEY"]
+    "required": [
+      "Python standard library"
+    ],
+    "optional": [
+      "chromadb",
+      "DeepSeek API access",
+      "Serper API access"
+    ]
   },
-  "limitations": [
-    "/search is a Markdown procedure and is not directly bound to SearchOrchestrator",
-    "parallel, streaming, verification, and orchestration require caller-supplied callbacks",
-    "configured MCP state and live provider availability are different"
-  ]
+  "credentials": [
+    {
+      "env": "SERPER_API_KEY",
+      "required": false,
+      "description": "Optional Serper web search credential"
+    },
+    {
+      "env": "SILICONFLOW_API_KEY",
+      "required": false,
+      "description": "Optional model-assisted planning and verification credential"
+    }
+  ],
+  "health_checks": [
+    {
+      "command": "python -m modules.search.search service-health",
+      "description": "Validate unified Search Service wiring, provider readiness, and cache writability",
+      "timeout": 30
+    }
+  ],
+  "storage": [
+    {
+      "type": "json",
+      "path": "_runtime/search/pipeline_cache.json",
+      "tables": [],
+      "description": "Unified final Search result cache pending SQLite cache migration"
+    },
+    {
+      "type": "json",
+      "path": "_runtime/search",
+      "tables": [],
+      "description": "Search history, quality metrics, and compatibility cache files"
+    },
+    {
+      "type": "chromadb",
+      "path": "_runtime/search/chroma",
+      "tables": [],
+      "description": "Optional local semantic search index"
+    }
+  ],
+  "experimental": false
 }
