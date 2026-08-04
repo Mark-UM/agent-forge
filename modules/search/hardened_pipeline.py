@@ -2,13 +2,15 @@
 
 The legacy pipeline remains import-compatible for existing tests and callers.
 New production wiring uses ``HardenedSearchPipeline`` so an unavailable or
-empty provider never prevents the next candidate from running.
+empty provider never prevents the next candidate from running.  Fresh final
+cache hits are consumed without writing a replacement entry, preserving the
+original ``retrieved_at`` freshness boundary.
 """
 from __future__ import annotations
 
 import time
 
-from modules.common.result import ErrorInfo, OperationResult, StepStatus, WarningInfo
+from modules.common.result import OperationResult, StepStatus, WarningInfo
 from modules.search.contracts import ProviderExecution, SearchResult
 from modules.search.pipeline import SearchPipeline
 from modules.search.provider_policy import (
@@ -27,8 +29,8 @@ def _annotate_execution(
     outcome: ProviderOutcome,
     retryable: bool = False,
 ) -> ProviderExecution:
-    # ProviderExecution predates the provider policy contract.  Dynamic fields
-    # retain source compatibility while serializers can expose the new data.
+    # ProviderExecution predates the provider policy contract. Dynamic fields
+    # retain source compatibility while serializers expose the new data.
     execution.provider_state = state.value
     execution.provider_outcome = outcome.value
     execution.retryable = bool(retryable)
@@ -57,6 +59,49 @@ def serialize_provider_execution(execution: ProviderExecution) -> dict:
 
 class HardenedSearchPipeline(SearchPipeline):
     """Search pipeline with deterministic provider fallback and telemetry."""
+
+    def execute(self):
+        """Run the canonical steps without refreshing a final cache hit."""
+        self.results = []
+        self.provider_executions = []
+        self.warnings = []
+        self.step_reports = {}
+        self.degraded_mode = False
+        self._result = None
+
+        validation = self.validate_request()
+        if not validation.success:
+            return self._build_result()
+
+        self.normalize_query()
+        self.plan_step()
+
+        cache_hit = False
+        if self._cache_get_fn is not None:
+            lookup = self.final_cache_lookup()
+            cache_hit = bool(
+                lookup.success and lookup.data and lookup.data.get("hit")
+            )
+
+        if not cache_hit:
+            self.provider_cache_lookup()
+            self.provider_execute()
+
+        self.normalize_results()
+        self.deduplicate()
+        self.rank()
+        self.aggregate()
+        self.verify()
+        self.format()
+        if cache_hit:
+            skipped = OperationResult.skipped(
+                reason="final cache hit; preserve original retrieved_at",
+                step="cache_store",
+            )
+            self._record_step("cache_store", skipped)
+        else:
+            self.cache_store()
+        return self._build_result()
 
     def provider_execute(self) -> OperationResult:
         pending = list(getattr(self, "_pending_subqueries", []))
