@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 from pathlib import Path
 
@@ -16,13 +15,15 @@ def test_private_collection_target_is_rejected():
 
 
 def test_browser_use_is_disabled_without_explicit_override(monkeypatch):
-    monkeypatch.setattr(agent_wrapper, "_BROWSER_USE_AVAILABLE", True)
+    monkeypatch.setattr(agent_wrapper, "_BROWSER_USE_AVAILABLE", None)
+    monkeypatch.setattr(agent_wrapper, "_browser_use_installed", lambda: True)
     monkeypatch.delenv("AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", raising=False)
     assert agent_wrapper._check_browser_use() is False
 
 
 def test_browser_use_requires_explicit_reduced_security_override(monkeypatch):
-    monkeypatch.setattr(agent_wrapper, "_BROWSER_USE_AVAILABLE", True)
+    monkeypatch.setattr(agent_wrapper, "_BROWSER_USE_AVAILABLE", None)
+    monkeypatch.setattr(agent_wrapper, "_browser_use_installed", lambda: True)
     monkeypatch.setenv("AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", "1")
     assert agent_wrapper._check_browser_use() is True
 
