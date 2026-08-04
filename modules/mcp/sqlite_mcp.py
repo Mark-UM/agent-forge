@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
 """SQLite MCP server with fail-closed read-only enforcement.
 
-The public surface remains compatible with the previous implementation:
-``SQLiteClient``, ``query``, ``list_tables``, ``get_schema``, the stdio MCP
-server, and the CLI are preserved.  Read-only safety no longer depends on
-matching the first SQL keyword.  It is enforced by all of the following:
-
-* SQLite URI ``mode=ro``;
-* ``PRAGMA query_only = ON``;
-* a SQLite authorizer that rejects writes, schema changes, ATTACH/DETACH,
-  transactions, unsafe PRAGMAs, and extension-loading functions;
-* the single-statement guarantee of ``Connection.execute``.
-
-Write access is available only through ``execute`` on a client constructed with
-``writable=True``.  ``query`` always uses a read-only connection, even for a
-writable client.
+Read APIs use URI ``mode=ro``, ``PRAGMA query_only=ON``, a SQLite authorizer,
+and an early statement classifier for commands such as a no-op ``REINDEX``
+that SQLite may not send through the authorizer when no index exists.
 """
 from __future__ import annotations
 
@@ -22,6 +11,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 from urllib.parse import quote
@@ -33,22 +23,19 @@ except Exception:
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "sqlite-mcp"
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.1.1"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = str(_PROJECT_ROOT / "_runtime" / "mcp-sqlite.db")
 MAX_ROWS = 1000
 MAX_SQL_CHARS = 200_000
 
-# Retained as an early diagnostic only.  This set is deliberately broader than
-# the legacy version, but the SQLite connection and authorizer are the actual
-# security boundary.
 _WRITE_KEYWORDS = frozenset(
     {
         "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
         "TRUNCATE", "REPLACE", "MERGE", "ATTACH", "DETACH", "VACUUM",
         "REINDEX", "ANALYZE", "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT",
-        "RELEASE", "PRAGMA",
+        "RELEASE",
     }
 )
 
@@ -67,6 +54,7 @@ _READ_ONLY_PRAGMAS = frozenset(
         "integrity_check",
         "module_list",
         "pragma_list",
+        "query_only",
         "quick_check",
         "schema_version",
         "table_info",
@@ -113,6 +101,10 @@ _DENIED_ACTIONS = frozenset(
 _SQLITE_PRAGMA = getattr(sqlite3, "SQLITE_PRAGMA", -1)
 _SQLITE_FUNCTION = getattr(sqlite3, "SQLITE_FUNCTION", -1)
 _DANGEROUS_FUNCTIONS = frozenset({"load_extension", "writefile", "edit"})
+_PRAGMA_RE = re.compile(
+    r"^\s*PRAGMA\s+(?:(?:\"?[^\".\s]+\"?)\.)?([A-Za-z_][A-Za-z0-9_]*)\s*(.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _normalise_sql(sql: str) -> str:
@@ -125,13 +117,47 @@ def _normalise_sql(sql: str) -> str:
     return sql
 
 
+def _pragma_is_read_only(statement: str) -> bool:
+    match = _PRAGMA_RE.match(statement)
+    if not match:
+        return False
+    name = match.group(1).lower()
+    remainder = match.group(2).strip().rstrip(";").strip()
+    if name not in _READ_ONLY_PRAGMAS:
+        return False
+    # Parenthesized/table arguments are reads. Assignment-like syntax changes
+    # connection or database state and is never accepted through query().
+    if remainder.startswith("="):
+        return False
+    if name == "query_only" and remainder:
+        return False
+    return True
+
+
+def _reject_obvious_state_change(statement: str) -> None:
+    stripped = statement.lstrip()
+    upper = stripped.upper()
+    if upper.startswith("PRAGMA"):
+        if not _pragma_is_read_only(statement):
+            raise sqlite3.DatabaseError("not authorized")
+        return
+    if any(upper.startswith(keyword) for keyword in _WRITE_KEYWORDS):
+        raise sqlite3.DatabaseError("not authorized")
+
+
 def _read_only_authorizer(action, arg1, arg2, db_name, trigger_name):  # noqa: ANN001
     del db_name, trigger_name
     if action in _DENIED_ACTIONS:
         return sqlite3.SQLITE_DENY
     if action == _SQLITE_PRAGMA:
         pragma_name = (arg1 or "").lower()
-        return sqlite3.SQLITE_OK if pragma_name in _READ_ONLY_PRAGMAS else sqlite3.SQLITE_DENY
+        if pragma_name not in _READ_ONLY_PRAGMAS:
+            return sqlite3.SQLITE_DENY
+        # Reading PRAGMA query_only is allowed; attempting to switch it off is
+        # rejected. SQLite supplies the assigned value through arg2.
+        if pragma_name == "query_only" and arg2 not in (None, ""):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
     if action == _SQLITE_FUNCTION:
         function_name = (arg2 or arg1 or "").lower()
         if function_name in _DANGEROUS_FUNCTIONS:
@@ -140,7 +166,7 @@ def _read_only_authorizer(action, arg1, arg2, db_name, trigger_name):  # noqa: A
 
 
 class SQLiteClient:
-    """SQLite client with separate read and write execution paths."""
+    """SQLite client with physically separate read and write paths."""
 
     def __init__(self, db_path: str, writable: bool = False):
         if not db_path:
@@ -157,13 +183,6 @@ class SQLiteClient:
         return path.resolve()
 
     def _connect(self, *, read_only: bool | None = None) -> sqlite3.Connection:
-        """Create a new thread-safe connection.
-
-        ``read_only`` defaults to the inverse of ``self.writable`` for backward
-        compatibility with callers that invoke ``_connect()`` directly.
-        Public read APIs pass ``read_only=True`` explicitly.
-        """
-
         if read_only is None:
             read_only = not self.writable
         path = self._resolved_path()
@@ -180,10 +199,11 @@ class SQLiteClient:
         return conn
 
     def _is_write_query(self, sql: str) -> bool:
-        """Best-effort diagnostic helper; not a security control."""
-
-        stripped = sql.lstrip().upper()
-        return any(stripped.startswith(keyword) for keyword in _WRITE_KEYWORDS)
+        try:
+            _reject_obvious_state_change(sql)
+        except sqlite3.DatabaseError:
+            return True
+        return False
 
     def list_tables(self) -> list[dict]:
         with self._connect(read_only=True) as conn:
@@ -219,9 +239,8 @@ class SQLiteClient:
             ]
 
     def query(self, sql: str, params: list | tuple | None = None) -> dict:
-        """Execute exactly one statement on a physically read-only connection."""
-
         statement = _normalise_sql(sql)
+        _reject_obvious_state_change(statement)
         bound_params = [] if params is None else params
         with self._connect(read_only=True) as conn:
             cursor = conn.execute(statement, bound_params)
@@ -243,8 +262,6 @@ class SQLiteClient:
             }
 
     def execute(self, sql: str, params: list | tuple | None = None) -> dict:
-        """Execute one statement on a writable connection."""
-
         if not self.writable:
             raise ValueError(
                 "Write operations require writable mode. Restart server with --writable."
@@ -338,7 +355,6 @@ def _handle_request(request):  # noqa: ANN001
     method = request.get("method")
     req_id = request.get("id")
     params = request.get("params", {}) or {}
-
     if method == "initialize":
         return {
             "jsonrpc": "2.0",
@@ -361,9 +377,12 @@ def _handle_request(request):  # noqa: ANN001
             "id": req_id,
             "error": {"code": -32601, "message": f"Method not found: {method}"},
         }
-
     if _client is None:
-        return _tool_result(req_id, {"success": False, "error": "server not initialized"}, error=True)
+        return _tool_result(
+            req_id,
+            {"success": False, "error": "server not initialized"},
+            error=True,
+        )
 
     tool_name = params.get("name")
     arguments = params.get("arguments", {}) or {}
@@ -373,9 +392,10 @@ def _handle_request(request):  # noqa: ANN001
         elif tool_name == "list_tables":
             result = {"tables": _client.list_tables()}
         elif tool_name == "get_schema":
+            table_name = arguments.get("table_name", "")
             result = {
-                "table_name": arguments.get("table_name", ""),
-                "columns": _client.get_schema(arguments.get("table_name", "")),
+                "table_name": table_name,
+                "columns": _client.get_schema(table_name),
             }
         elif tool_name == "execute":
             result = _client.execute(arguments.get("sql", ""), arguments.get("params", []))
@@ -417,9 +437,12 @@ def _run_server(db_path: str, writable: bool = False) -> None:
             }
             print(json.dumps(response, ensure_ascii=False), flush=True)
             continue
-
         if isinstance(request, list):
-            responses = [response for item in request if (response := _handle_request(item)) is not None]
+            responses = [
+                response
+                for item in request
+                if (response := _handle_request(item)) is not None
+            ]
             if responses:
                 print(json.dumps(responses, ensure_ascii=False), flush=True)
         else:
