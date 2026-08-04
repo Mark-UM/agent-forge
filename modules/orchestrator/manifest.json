@@ -1,20 +1,33 @@
 {
   "module": "orchestrator",
-  "version": "1.8.1",
-  "description": "Local collection, file indexing, action extraction, and schedule storage helpers",
+  "version": "1.9.0",
+  "description": "Secure local collection, file indexing, action extraction, and schedule storage helpers",
   "components": {
-    "agent_wrapper.py": "HTTP(S)-validated collection pipeline: browser-use Agent, local Browser daemon/Vision, then static fetch fallback",
+    "agent_wrapper.py": "Fail-closed collection pipeline: authenticated Browser daemon with global request interception, then secure Fetch MCP fallback",
     "file_indexer.py": "Optional ChromaDB-backed Markdown/text indexing",
     "action_extractor.py": "Model-assisted action extraction with schedule persistence",
     "schedule_store.py": "SQLite schedule CRUD under _runtime/mcp-sqlite.db"
   },
   "dependencies": {
-    "required": ["Python standard library", "dependencies pinned by requirements.txt"],
-    "optional": ["local Browser daemon", "SiliconFlow key", "BrowserUse/DeepSeek/Anthropic key"]
+    "required": [
+      "Python standard library",
+      "modules.common.security",
+      "modules.mcp.secure_fetch_mcp"
+    ],
+    "optional": [
+      "authenticated local Browser daemon",
+      "Vision provider for screenshot recognition",
+      "browser-use only through the explicit reduced-security override"
+    ]
+  },
+  "backend_policy": {
+    "dynamic_primary": "authenticated Browser daemon; visible DOM text with bounded lazy-load scrolling and optional screenshot/Vision enrichment",
+    "static_fallback": "secure_fetch_mcp with DNS/IP validation, redirect revalidation, and response-size limits",
+    "browser_use": "disabled by default because Agent Forge cannot yet inject the shared network policy into all browser-use requests; AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE=1 is an explicit reduced-security override"
   },
   "limitations": [
-    "browser-use autonomous collection requires a supported LLM key",
-    "daemon collection requires the Browser daemon to be started separately; static fetch remains the final fallback",
-    "generated Markdown reports are confined to ignored _runtime or OS temporary storage"
+    "daemon collection requires the Browser daemon to be started separately until the runtime supervisor is implemented",
+    "generated Markdown reports are confined to ignored _runtime or OS temporary storage",
+    "browser-use results are marked degraded_security when the operator explicitly enables that backend"
   ]
 }
