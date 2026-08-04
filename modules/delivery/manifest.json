@@ -1,0 +1,23 @@
+{
+  "name": "delivery",
+  "version": "1.0.0",
+  "description": "Final delivery gate running 6 check categories (engineering, resource, integration, i18n, test_quality, architecture) with Markdown/JSON reporters",
+  "entrypoints": {
+    "cli": "python -m modules.delivery.checklist"
+  },
+  "capabilities": [
+    {"name": "delivery.checklist", "version": "1.0", "description": "Run 6-category delivery checklist against a target project with whitelists and emit PASS/FAIL findings with per-category summaries (checklist.py, reporter.py)"}
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": ["modules.integration_check (delegated category 3 integration checks)"]
+  },
+  "credentials": [],
+  "health_checks": [
+    {"command": "python -m modules.delivery.checklist --help", "description": "Verify delivery checklist CLI loads", "timeout": 30}
+  ],
+  "storage": [
+    {"type": "none", "path": "", "tables": [], "description": "No persistent storage; reports are printed to stdout"}
+  ],
+  "experimental": false
+}

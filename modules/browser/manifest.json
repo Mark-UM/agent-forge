@@ -1,0 +1,23 @@
+{
+  "name": "browser",
+  "version": "1.0.0",
+  "description": "Loopback-only Playwright browser daemon exposing a small HTTP API for navigation, interaction, screenshots, and JS evaluation with restorable local state",
+  "entrypoints": {
+    "daemon": "python -m modules.browser.daemon"
+  },
+  "capabilities": [
+    {"name": "browser.automation", "version": "1.0", "description": "Drive a Chromium/Firefox/WebKit browser via a 127.0.0.1 HTTP API (navigate, click, type, screenshot, evaluate JS, scroll, tabs) with URL/selector input validation"}
+  ],
+  "dependencies": {
+    "required": ["Python standard library", "modules.bootstrap (activate_vendor_path)"],
+    "optional": ["playwright"]
+  },
+  "credentials": [],
+  "health_checks": [
+    {"command": "python -c \"import modules.browser.daemon\"", "description": "Verify browser daemon module imports", "timeout": 30}
+  ],
+  "storage": [
+    {"type": "json", "path": "_runtime/browser/profile", "tables": [], "description": "Persisted browser storage-state.json and screenshots under _runtime/browser/"}
+  ],
+  "experimental": true
+}

@@ -1,0 +1,23 @@
+{
+  "name": "common",
+  "version": "1.1.0",
+  "description": "Shared utility primitives: typed OperationResult/StepStatus contracts, typed error hierarchy, UTC timezone normalization helpers, and unified Run/Step/Event execution model",
+  "entrypoints": {},
+  "capabilities": [
+    {"name": "common.contracts", "version": "1.0", "description": "Typed OperationResult, StepStatus (9 states), ErrorInfo/WarningInfo, and AgentForgeError hierarchy replacing ad-hoc success markers (result.py, errors.py)"},
+    {"name": "common.time_utils", "version": "1.0", "description": "UTC normalization (to_utc_iso), ISO 8601 parsing with timezone, DST gap/fold handling, and offset formatting (time_utils.py)"},
+    {"name": "common.run", "version": "1.0", "description": "Unified Run/Step/Event execution model: RunStatus/EventType/EventLevel enums, Event/Step/Run/RunResult dataclasses, RunRecorder/StepRecorder context managers, run_from_step_reports adapter (run.py)"}
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": ["backports.zoneinfo (for Python < 3.9)"]
+  },
+  "credentials": [],
+  "health_checks": [
+    {"command": "python -c \"import modules.common.result, modules.common.errors, modules.common.time_utils, modules.common.run\"", "description": "Verify common utility modules import including Run/Step/Event model", "timeout": 30}
+  ],
+  "storage": [
+    {"type": "none", "path": "", "tables": [], "description": "Library only; no persistent storage"}
+  ],
+  "experimental": false
+}

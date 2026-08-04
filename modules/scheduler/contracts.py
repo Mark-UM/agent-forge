@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from modules.common.result import StepStatus
+from modules.common.result import OperationResult, StepStatus
+from modules.common.run import Run, RunStatus
 
 
 # ── Enums ────────────────────────────────────────────────────
@@ -251,6 +252,79 @@ class JobRun:
             'run_count_at_start': self.run_count_at_start,
             'next_run_at_after': self.next_run_at_after,
         }
+
+    def to_run(self) -> Run:
+        """Adapt this JobRun into a module-agnostic Run.
+
+        A JobRun has no sub-steps (it is a single execution), so the Run
+        contains a single Step named 'job_execute' whose OperationResult
+        reflects the JobRunStatus. This is the Phase C adapter — existing
+        callers are unaffected.
+
+        JobRunStatus → RunStatus mapping:
+            QUEUED    → pending (not yet started)
+            RUNNING   → running
+            SUCCEEDED → succeeded
+            FAILED    → failed
+            TIMED_OUT → timed_out
+            ABANDONED → abandoned
+        """
+        status_map = {
+            JobRunStatus.QUEUED: RunStatus.PENDING,
+            JobRunStatus.RUNNING: RunStatus.RUNNING,
+            JobRunStatus.SUCCEEDED: RunStatus.SUCCEEDED,
+            JobRunStatus.FAILED: RunStatus.FAILED,
+            JobRunStatus.TIMED_OUT: RunStatus.TIMED_OUT,
+            JobRunStatus.ABANDONED: RunStatus.ABANDONED,
+        }
+        run_status = status_map.get(self.status, RunStatus.PENDING)
+
+        # Build a single OperationResult for the job execution step
+        if run_status == RunStatus.SUCCEEDED:
+            op_result = OperationResult.success_with(step='job_execute')
+        elif run_status == RunStatus.FAILED:
+            op_result = OperationResult.failed(
+                code='job_failed', message=self.error or 'job failed',
+                step='job_execute')
+        elif run_status == RunStatus.TIMED_OUT:
+            op_result = OperationResult.timed_out(
+                message=self.error or 'deadline exceeded', step='job_execute')
+        elif run_status == RunStatus.ABANDONED:
+            op_result = OperationResult.skipped(
+                reason=self.error or 'abandoned', step='job_execute')
+        else:
+            op_result = OperationResult(
+                success=False, status=StepStatus.PENDING,
+                metadata={'step': 'job_execute'},
+            )
+
+        from modules.common.run import Step
+        run = Run(
+            run_id=self.id,
+            run_type='scheduler.job',
+            status=run_status,
+            started_at=self.started_at,
+            ended_at=self.ended_at,
+            duration_ms=int(self.duration_ms),
+            error=self.error,
+            metadata={
+                'job_id': self.job_id,
+                'triggered_by': self.triggered_by,
+                'run_count_at_start': self.run_count_at_start,
+            },
+        )
+        run.steps.append(Step(
+            step_id=f"{self.id}-step",
+            run_id=run.run_id,
+            name='job_execute',
+            order=0,
+            status=run_status,
+            started_at=self.started_at,
+            ended_at=self.ended_at,
+            duration_ms=int(self.duration_ms),
+            result=op_result,
+        ))
+        return run
 
 
 # ── Quarantine ───────────────────────────────────────────────

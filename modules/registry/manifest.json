@@ -1,0 +1,24 @@
+{
+  "name": "registry",
+  "version": "1.0.0",
+  "description": "Capability Registry: discover, validate, list, and health-check module manifests across modules/",
+  "entrypoints": {
+    "cli": "python -m modules.registry list"
+  },
+  "capabilities": [
+    {"name": "registry.discovery", "version": "1.0", "description": "Scan modules/*/manifest.json, validate against the schema, and return normalized CapabilityManifest objects (discovery.py, schema.py)"},
+    {"name": "registry.health", "version": "1.0", "description": "Execute declared health_checks via subprocess and aggregate healthy/degraded/unhealthy status with credential presence checks (health.py)"}
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": []
+  },
+  "credentials": [],
+  "health_checks": [
+    {"command": "python -m modules.registry list", "description": "Verify registry CLI discovers and lists modules", "timeout": 30}
+  ],
+  "storage": [
+    {"type": "none", "path": "", "tables": [], "description": "No persistent storage; manifests are read on demand from modules/*/manifest.json"}
+  ],
+  "experimental": false
+}

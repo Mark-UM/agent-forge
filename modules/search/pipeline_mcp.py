@@ -1,9 +1,16 @@
 """modules.search.pipeline_mcp — MCP entry exposing `search_pipeline` (R2-2.8).
 
-Production MCP tool that wraps `modules.search.pipeline.SearchPipeline`.
-This is the default path for `/search`; the legacy per-MCP dispatch path is
-retained as a degraded fallback and is flagged with `degraded_mode=true`
-when used.
+Production MCP tool that delegates to the unified `SearchService`
+(`modules.search.service`), which in turn wraps
+`modules.search.pipeline.SearchPipeline`. This is the default path for
+`/search`; the legacy per-MCP dispatch path is retained as a degraded
+fallback and is flagged with `degraded_mode=true` when used.
+
+All three entry points (MCP server, CLI, /search Command) now route through
+`SearchService.search()` so that dependency wiring (provider registry, cache,
+planner, verifier) and result normalization are consistent. This module keeps
+its own lazy `planner_fn` / `verify_fn` builders (they import sibling
+`planner.py` / `verifier.py`) and feed them into the Service.
 
 Tool exposed (JSON-RPC 2.0 over stdio, MCP 2024-11-05):
     search_pipeline(
@@ -45,6 +52,10 @@ from modules.search.providers import (
     ProviderRegistry, SerperProvider, SearXNGProvider, ArxivProvider,
     SemanticScholarProvider, LocalSemanticProvider, FetchProvider,
     default_registry,
+)
+from modules.search.service import (
+    SearchService, SearchServiceRequest, SearchServiceResult,
+    get_search_service,
 )
 
 # MCP protocol constants
@@ -122,7 +133,7 @@ def build_default_registry() -> ProviderRegistry:
     return default_registry(include_credentials_required=False)
 
 
-# ── Library entry point ──────────────────────────────────────
+# ── Library entry point (delegates to SearchService) ─────────
 
 def search_pipeline(
     query: str,
@@ -136,83 +147,83 @@ def search_pipeline(
     cache_get_fn: Optional[Any] = None,
     cache_store_fn: Optional[Any] = None,
     verify_fn: Optional[Any] = None,
+    no_cache: bool = False,
 ) -> dict[str, Any]:
     """Library entry point. Returns the serialized SearchPipelineResult.
 
-    When no registry/planner/cache/verifier is injected, the pipeline runs
-    in degraded_mode=True (no providers, no cache, no verifier). This keeps
-    the function safe to call from any context while making the degradation
-    explicit in the result.
+    This is now a thin backward-compat shim over `SearchService.search()`.
+    When no dependencies are injected, the module-level singleton is used
+    (on-disk cache + default provider registry, consistent with the MCP
+    server and CLI). When any dependency is injected, a fresh `SearchService`
+    is constructed with exactly those dependencies so callers retain full
+    control for testing.
 
-    Callers (OpenCode `/search`) SHOULD inject real callbacks. When called
-    via the MCP server below, the server builds the default registry and
-    wires the on-disk cache automatically.
+    The return value is the serialized `SearchPipelineResult` (the inner
+    `result` field of `SearchServiceResult`), preserving the pre-Service
+    contract so existing callers keep working.
     """
-    try:
-        mode_enum = SearchMode(mode)
-    except ValueError:
-        mode_enum = SearchMode.STANDARD
-
-    reg = registry or build_default_registry()
-
-    request = SearchRequest(
-        query=query, mode=mode_enum, language=language,
-        max_sub_queries=max_sub_queries, verify=verify,
+    no_deps_injected = (
+        registry is None and planner_fn is None and verify_fn is None
+        and cache_get_fn is None and cache_store_fn is None
     )
-    pipeline = SearchPipeline(
-        request,
-        registry=reg,
-        planner_fn=planner_fn,
-        cache_get_fn=cache_get_fn,
-        cache_store_fn=cache_store_fn,
-        verify_fn=verify_fn,
+
+    request = SearchServiceRequest(
+        query=query,
+        mode=mode,
+        language=language,
+        max_sub_queries=max_sub_queries,
+        verify=verify,
+        no_cache=no_cache,
     )
-    result = pipeline.execute()
-    return result.to_dict()
+
+    if no_deps_injected:
+        service = get_search_service()
+    else:
+        # Caller injected at least one dependency — build a fresh Service
+        # honouring exactly what was (or was not) provided. None cache fns
+        # fall back to the Service's on-disk default; pass no_cache=True to
+        # bypass entirely.
+        service = SearchService(
+            registry=registry,
+            planner_fn=planner_fn,
+            verify_fn=verify_fn,
+            cache_get_fn=cache_get_fn,
+            cache_store_fn=cache_store_fn,
+        )
+
+    service_result = service.search(request)
+    # Backward-compat: return the inner serialized pipeline result. On
+    # failure this is None; mirror the old behaviour by returning an
+    # error dict so callers can still do result.get('results', []).
+    if service_result.success:
+        return service_result.result or {}
+    return {
+        'success': False,
+        'error': service_result.error,
+        'degraded_mode': service_result.degraded_mode,
+        'results': [],
+        'plan': None,
+        'verification': {'status': 'not_run'},
+        'step_reports': {},
+        'warnings': [service_result.error] if service_result.error else [],
+    }
 
 
-# ── On-disk cache wiring (used by MCP server) ────────────────
+# ── Production service wiring (MCP server + CLI) ─────────────
 
-_CACHE_FILE = _PROJECT_ROOT / '_runtime' / 'search' / 'pipeline_cache.json'
+def _build_production_service() -> SearchService:
+    """Build a SearchService with the real planner and verifier wired.
 
-
-def _load_cache() -> dict[str, Any]:
-    if not _CACHE_FILE.exists():
-        return {}
-    try:
-        with open(_CACHE_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _save_cache(cache: dict[str, Any]) -> None:
-    try:
-        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _CACHE_FILE.with_suffix('.json.tmp')
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, _CACHE_FILE)
-    except OSError:
-        pass  # cache write failure is non-fatal
-
-
-def _cache_get(key: str) -> Optional[dict]:
-    cache = _load_cache()
-    return cache.get(key)
-
-
-def _cache_store(key: str, entry: dict) -> None:
-    cache = _load_cache()
-    cache[key] = entry
-    # Cap cache size (keep last 500 entries by insertion order via dict)
-    if len(cache) > 500:
-        # Drop oldest 100
-        keys = list(cache.keys())[:100]
-        for k in keys:
-            cache.pop(k, None)
-    _save_cache(cache)
+    The on-disk cache and default provider registry come from the Service
+    defaults. The planner/verifier are built lazily by this module's
+    `_build_planner_fn` / `_build_verify_fn` helpers, which import the
+    sibling `planner.py` / `verifier.py` modules. If those modules are
+    unavailable, the Service runs in degraded mode (explicit in the result).
+    """
+    return SearchService(
+        planner_fn=_build_planner_fn(),
+        verify_fn=_build_verify_fn(),
+    )
 
 
 # ── Planner wiring (lazy) ────────────────────────────────────
@@ -312,24 +323,33 @@ def _handle_request(request: dict) -> Optional[dict]:
                 },
             }
         try:
-            result = search_pipeline(
+            # Route through the unified SearchService so the MCP server,
+            # CLI, and /search Command share identical dependency wiring.
+            service = _build_production_service()
+            service_result = service.search(SearchServiceRequest(
                 query=query,
                 mode=args.get('mode', 'standard'),
                 language=args.get('language', 'auto'),
                 max_sub_queries=int(args.get('max_sub_queries', 5)),
                 verify=bool(args.get('verify', True)),
-                registry=build_default_registry(),
-                planner_fn=_build_planner_fn(),
-                cache_get_fn=_cache_get,
-                cache_store_fn=_cache_store,
-                verify_fn=_build_verify_fn(),
-            )
+            ))
+            # Return the inner serialized pipeline result to preserve the
+            # pre-Service response shape consumed by MCP clients.
+            result = service_result.result or {
+                'success': False,
+                'error': service_result.error,
+                'results': [],
+                'plan': None,
+            }
             return {
                 'jsonrpc': '2.0', 'id': req_id,
                 'result': {
                     'content': [{'type': 'text',
                                  'text': json.dumps(result, ensure_ascii=False)}],
-                    'isError': not result.get('results') and not result.get('plan'),
+                    'isError': (
+                        not service_result.success
+                        or (not result.get('results') and not result.get('plan'))
+                    ),
                 },
             }
         except Exception as e:
@@ -398,6 +418,8 @@ def _cli() -> int:
     p_run.add_argument('--language', default='auto')
     p_run.add_argument('--max-sub-queries', type=int, default=5)
     p_run.add_argument('--no-verify', action='store_true')
+    p_run.add_argument('--no-cache', action='store_true',
+                       help='Bypass the on-disk result cache')
     p_run.add_argument('--json', action='store_true')
 
     args = parser.parse_args()
@@ -407,18 +429,22 @@ def _cli() -> int:
         return 0
 
     if args.command == 'run':
-        result = search_pipeline(
+        # Route through the unified SearchService (same path as MCP server).
+        service = _build_production_service()
+        service_result = service.search(SearchServiceRequest(
             query=args.query,
             mode=args.mode,
             language=args.language,
             max_sub_queries=args.max_sub_queries,
             verify=not args.no_verify,
-            registry=build_default_registry(),
-            planner_fn=_build_planner_fn(),
-            cache_get_fn=_cache_get,
-            cache_store_fn=_cache_store,
-            verify_fn=_build_verify_fn(),
-        )
+            no_cache=args.no_cache,
+        ))
+        result = service_result.result or {
+            'success': False,
+            'error': service_result.error,
+            'results': [],
+            'plan': None,
+        }
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:

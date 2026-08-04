@@ -10,6 +10,17 @@ This Slash Command is interpreted by the active agent. It is not a direct
 binding to `SearchOrchestrator` and must not claim deterministic execution of
 every Python stage.
 
+## Unified Service entry point
+
+All search execution routes through the unified `SearchService`
+(`modules.search.service`). The MCP server (`pipeline_mcp.py`), the CLI
+(`python -m modules.search.search pipeline`), and this Slash Command share
+the same dependency wiring (provider registry, on-disk cache, planner,
+verifier) and the same normalized `SearchServiceResult` contract. The Service
+delegates to `SearchPipeline.execute()` — it wires dependencies, it does not
+implement search logic. When the agent runs Python stages directly, prefer
+`SearchService.search()` over constructing `SearchPipeline` ad hoc.
+
 ## Provider state
 
 Read `opencode.json` at execution time. In the current repository:
@@ -30,7 +41,10 @@ may still fail because of network or service state.
    sending query text to any external MCP/API. If redaction fails, stop rather
    than sending unreviewed text.
 3. Unless `--no-cache` is set, query the local cache through
-   `python -m modules.search.search cache-get`.
+   `python -m modules.search.search cache-get`. The unified `SearchService`
+   also reads/writes the pipeline result cache at
+   `_runtime/search/pipeline_cache.json` (shared by MCP, CLI, and this
+   Command).
 4. Choose providers from current configuration:
    - library/framework documentation: prefer Context7;
    - repository/code questions: prefer GitHub;
@@ -66,6 +80,14 @@ the same as successful.
 ## Local utility commands
 
 ```powershell
+# Unified Service entry points (MCP / CLI / Command share these)
+python -m modules.search.search pipeline --query "..." --mode standard --json
+python -m modules.search.search pipeline --query "..." --no-cache --no-verify
+python -m modules.search.search service-health
+python modules/search/pipeline_mcp.py run --query "..." --json
+python modules/search/pipeline_mcp.py serve
+
+# History / cache / stats utilities
 python -m modules.search.search recent --limit 20 --days 7
 python -m modules.search.search stats --days 30
 python -m modules.search.search find --query "keyword"
@@ -78,5 +100,9 @@ python -m modules.search.prewarm run --dry-run
 python -m modules.search.orchestrator "query" --dry-run
 ```
 
-The last command prints/plans the Python pipeline. Without injected callbacks,
-it does not perform the same live MCP search as this Slash Command.
+`pipeline` and `pipeline_mcp.py run` both route through `SearchService.search()`
+— they are the canonical Python execution path and share the on-disk cache.
+`service-health` reports the Service-layer status (provider registry, cache
+writability, credentials); `health` pings remote MCP servers. The
+`orchestrator` command prints/plans the Python pipeline. Without injected
+callbacks, it does not perform the same live MCP search as this Slash Command.

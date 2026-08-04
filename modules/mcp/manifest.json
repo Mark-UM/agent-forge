@@ -1,0 +1,25 @@
+{
+  "name": "mcp",
+  "version": "1.0.0",
+  "description": "Self-hosted MCP servers (JSON-RPC 2.0 over stdio): fetch (URL to markdown), sqlite (read-only query/schema), and time (timezone conversion)",
+  "entrypoints": {
+    "mcp": "python -m modules.mcp.fetch_mcp serve"
+  },
+  "capabilities": [
+    {"name": "mcp.fetch", "version": "1.0", "description": "Fetch a URL and return content as markdown or raw text with HTML conversion, encoding detection, and pagination safety (fetch_mcp.py; serve via 'python -m modules.mcp.fetch_mcp serve')"},
+    {"name": "mcp.sqlite", "version": "1.0", "description": "Read-only SQLite query, list_tables, get_schema, and optional writable execute with parameterized queries (sqlite_mcp.py; serve via 'python -m modules.mcp.sqlite_mcp serve')"},
+    {"name": "mcp.time", "version": "1.0", "description": "Get current time in a timezone and convert times between timezones with DST gap/fold handling (time_mcp.py; serve via 'python -m modules.mcp.time_mcp serve')"}
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": []
+  },
+  "credentials": [],
+  "health_checks": [
+    {"command": "python -c \"import modules.mcp.fetch_mcp, modules.mcp.sqlite_mcp, modules.mcp.time_mcp\"", "description": "Verify all three MCP server modules import", "timeout": 30}
+  ],
+  "storage": [
+    {"type": "sqlite", "path": "_runtime/mcp-sqlite.db", "tables": [], "description": "Default SQLite database for sqlite_mcp (DEFAULT_DB_PATH); created and managed by callers"}
+  ],
+  "experimental": false
+}

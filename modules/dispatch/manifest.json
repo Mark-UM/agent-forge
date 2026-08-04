@@ -1,0 +1,25 @@
+{
+  "name": "dispatch",
+  "version": "1.0.0",
+  "description": "Flash Role Guard: central dispatch interceptor enforcing the DeepSeek Flash/Pro model routing policy with auto-redirect and guard logging",
+  "entrypoints": {
+    "cli": "python -m modules.dispatch.guard"
+  },
+  "capabilities": [
+    {"name": "dispatch.guard", "version": "1.0", "description": "Resolve the allowed model per task type, enforce the Flash allowlist/forbidden list, and provide a safe call_flash() that auto-redirects forbidden tasks to Pro (guard.py)"}
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": []
+  },
+  "credentials": [
+    {"env": "DEEPSEEK_API_KEY", "required": false, "description": "DeepSeek API key consumed by call_flash(); not required for policy resolution (resolve_model / check_task_allowed)"}
+  ],
+  "health_checks": [
+    {"command": "python -c \"import modules.dispatch.guard\"", "description": "Verify dispatch guard module imports", "timeout": 30}
+  ],
+  "storage": [
+    {"type": "none", "path": "", "tables": [], "description": "No persistent storage; _runtime/dispatch/guard_log.jsonl is a best-effort runtime side-effect, not module state"}
+  ],
+  "experimental": false
+}

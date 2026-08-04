@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from modules.common.result import OperationResult, StepStatus
+from modules.common.run import Run, run_from_step_reports
 
 
 # ── Enums ────────────────────────────────────────────────────
@@ -293,6 +294,34 @@ class SearchPipelineResult:
             'degraded_mode': self.degraded_mode,
             'retrieved_at': self.retrieved_at,
         }
+
+    def to_run(self, *, run_id: Optional[str] = None) -> Run:
+        """Adapt this SearchPipelineResult into a module-agnostic Run.
+
+        The Run's steps are built from `step_reports` (each OperationResult
+        becomes a Step). The Run's status is derived from the step statuses
+        and `degraded_mode` flag. This is the Phase C adapter — existing
+        callers are unaffected; new callers can inspect the Run/Step/Event
+        model for cross-module telemetry.
+
+        Events are NOT retroactively synthesized (the pipeline did not record
+        them). Use RunRecorder for live event capture.
+        """
+        return run_from_step_reports(
+            run_type='search',
+            step_reports=self.step_reports,
+            run_id=run_id,
+            started_at=self.retrieved_at,
+            degraded_mode=self.degraded_mode,
+            metadata={
+                'query': self.request.query,
+                'mode': self.request.mode.value,
+                'result_count': len(self.results),
+                'verification_status': self.verification.status.value
+                    if hasattr(self.verification.status, 'value')
+                    else str(self.verification.status),
+            },
+        )
 
 
 # ── Legacy Adapter (read-only) ───────────────────────────────

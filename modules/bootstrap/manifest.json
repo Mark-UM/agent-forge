@@ -1,0 +1,24 @@
+{
+  "name": "bootstrap",
+  "version": "1.0.0",
+  "description": "Project scaffold generator, vendored dependency manager, and startup secret emitter for new projects",
+  "entrypoints": {
+    "cli": "python -m modules.bootstrap.generator"
+  },
+  "capabilities": [
+    {"name": "bootstrap.scaffold", "version": "1.0", "description": "Generate 9 mandatory scaffold files (ESLint, Prettier, Husky, CI/CD, Vite, vitest, tsconfig) from templates with atomic writes and mandatory-marker validation"},
+    {"name": "bootstrap.dependencies", "version": "1.0", "description": "Activate, report, and install the vendored Python dependency layer (vendor/python-libs) plus Playwright-managed browsers"}
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": ["pip (for install subcommand)", "playwright (for install-browser subcommand)"]
+  },
+  "credentials": [],
+  "health_checks": [
+    {"command": "python -m modules.bootstrap.generator --list", "description": "Verify generator CLI loads and lists templates", "timeout": 30}
+  ],
+  "storage": [
+    {"type": "none", "path": "", "tables": [], "description": "No persistent storage; scaffold files are written into the target project"}
+  ],
+  "experimental": false
+}

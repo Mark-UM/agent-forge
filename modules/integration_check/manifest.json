@@ -1,0 +1,23 @@
+{
+  "name": "integration_check",
+  "version": "1.0.0",
+  "description": "Integration link checker running 5 stdlib-only rule categories (init_called, event_balance, state_cleanup, i18n_usage, cross_layer_call) against TypeScript projects",
+  "entrypoints": {
+    "cli": "python -m modules.integration_check.checker"
+  },
+  "capabilities": [
+    {"name": "integration_check.checker", "version": "1.0", "description": "Run 5 integration rules driven by externalized rule JSON with configurable whitelists and emit structured findings with Markdown/JSON output (checker.py, reporter.py)"}
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": []
+  },
+  "credentials": [],
+  "health_checks": [
+    {"command": "python -m modules.integration_check.checker --help", "description": "Verify integration checker CLI loads", "timeout": 30}
+  ],
+  "storage": [
+    {"type": "none", "path": "", "tables": [], "description": "No persistent storage; rules are loaded read-only from modules/integration_check/rules/*.json"}
+  ],
+  "experimental": false
+}

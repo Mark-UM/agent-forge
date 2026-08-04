@@ -16,6 +16,8 @@ Subcommands:
   cache-get      查询缓存
   cache-clean    清理过期缓存
   health         MCP 健康检查
+  pipeline       通过统一 SearchService 执行搜索 (MCP/CLI/Command 共用入口)
+  service-health SearchService 层健康检查 (provider registry / cache / credentials)
 
 Files:
   _runtime/search/search_history.YYYY-MM-DD.jsonl   按日切分日志
@@ -837,6 +839,100 @@ def health_check(args):
     return 0
 
 
+# ── SearchService 层入口 (统一 MCP/CLI/Command) ────────────────
+
+def run_pipeline_via_service(args):
+    """通过统一 SearchService 执行搜索。
+
+    这是 MCP server / CLI / /search Command 共用的入口。Service 层负责
+    依赖装配 (provider registry / cache / planner / verifier) 并委托给
+    SearchPipeline.execute()。
+    """
+    # 延迟导入避免模块加载时的循环依赖
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
+    from modules.search.service import (
+        SearchService, SearchServiceRequest,
+    )
+    # 复用 pipeline_mcp 的生产装配 (real planner + verifier 懒加载)
+    from modules.search.pipeline_mcp import _build_production_service
+
+    service = _build_production_service()
+    service_result = service.search(SearchServiceRequest(
+        query=args.query,
+        mode=args.mode,
+        language=args.language,
+        max_sub_queries=args.max_sub_queries,
+        verify=not args.no_verify,
+        no_cache=args.no_cache,
+    ))
+
+    result = service_result.result or {}
+
+    if args.json:
+        print(json.dumps({
+            'success': service_result.success,
+            'query': service_result.query,
+            'mode': service_result.mode,
+            'degraded_mode': service_result.degraded_mode,
+            'duration_ms': service_result.duration_ms,
+            'error': service_result.error,
+            'result': result,
+        }, ensure_ascii=False, indent=2))
+        return 0 if service_result.success else 1
+
+    # 人类可读摘要
+    if not service_result.success:
+        print(f"✗ 搜索失败: {service_result.error}", file=sys.stderr)
+        return 1
+
+    print(result.get('formatted_output', ''))
+    plan = result.get('plan') or {}
+    print(f"\n--- Pipeline 摘要 ---")
+    print(f"模式: {service_result.mode}  耗时: {service_result.duration_ms}ms")
+    print(f"子查询数: {len(plan.get('sub_queries', []))}")
+    print(f"结果数: {len(result.get('results', []))}")
+    print(f"验证状态: {result.get('verification', {}).get('status')}")
+    print(f"降级模式: {result.get('degraded_mode')}")
+    steps = result.get('step_reports', {})
+    print(f"已执行步骤: {len(steps)}")
+    for s, r in steps.items():
+        print(f"  - {s}: {r.get('status')}")
+    return 0
+
+
+def service_health_check(args):
+    """SearchService 层健康检查。
+
+    报告 provider registry 状态、缓存目录可写性、凭据存在性。
+    区别于 `health` 子命令 (后者 ping 远程 MCP 服务器)。
+    """
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
+    from modules.search.service import get_search_service
+
+    service = get_search_service()
+    status = service.health()
+
+    print("## SearchService 层健康检查\n")
+    print(f"  service: {status['service']}")
+    print(f"  healthy: {'✓' if status['healthy'] else '✗'}")
+    print(f"  providers ({status['provider_count']}): "
+          f"{', '.join(status['providers']) if status['providers'] else '(none)'}")
+    print(f"  cache_dir: {status['cache_dir']}")
+    print(f"  cache_writable: {'✓' if status['cache_writable'] else '✗'}")
+    print(f"  credentials:")
+    for cred, present in status['credentials'].items():
+        print(f"    - {cred}: {'✓' if present else '✗ (未设置)'}")
+    if status['warnings']:
+        print(f"  warnings:")
+        for w in status['warnings']:
+            print(f"    - {w}")
+    print(f"\n  capabilities: {', '.join(service.capabilities())}")
+
+    return 0 if status['healthy'] else 1
+
+
 # ── 主入口 ──────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
@@ -918,6 +1014,24 @@ def main():
     p_filter.add_argument('--limit', type=int, default=50,
                           help='每条历史记录最多输出的结果数（默认 50）')
 
+    # pipeline 子命令：通过统一 SearchService 执行搜索（MCP/CLI/Command 共用入口）
+    p_pipe = sub.add_parser('pipeline',
+                            help='通过统一 SearchService 执行搜索 (MCP/CLI/Command 共用入口)')
+    p_pipe.add_argument('--query', required=True, help='搜索查询')
+    p_pipe.add_argument('--mode', default='standard',
+                        choices=['quick', 'standard', 'deep', 'academic'],
+                        help='Pipeline 模式 (deep 启用 planner)')
+    p_pipe.add_argument('--language', default='auto', help='语言提示: auto|en|zh|...')
+    p_pipe.add_argument('--max-sub-queries', type=int, default=5,
+                        help='Planner 最多生成的子查询数')
+    p_pipe.add_argument('--no-verify', action='store_true', help='跳过验证步骤')
+    p_pipe.add_argument('--no-cache', action='store_true', help='绕过磁盘结果缓存')
+    p_pipe.add_argument('--json', action='store_true', help='输出完整 JSON 结果')
+
+    # service-health 子命令：SearchService 层健康检查（区别于 MCP 级 health）
+    sub.add_parser('service-health',
+                   help='SearchService 层健康检查 (provider registry / cache / credentials)')
+
     args = parser.parse_args()
 
     try:
@@ -939,6 +1053,10 @@ def main():
             return health_check(args)
         elif args.command == 'filter':
             return filter_history_results(args)
+        elif args.command == 'pipeline':
+            return run_pipeline_via_service(args)
+        elif args.command == 'service-health':
+            return service_health_check(args)
     except KeyboardInterrupt:
         print("\n已中断", file=sys.stderr)
         return 130
