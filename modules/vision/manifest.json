@@ -1,12 +1,62 @@
 {
-  "module": "vision",
-  "version": "1.0.0",
-  "entry_point": "python -m modules.vision.recognize",
-  "description": "SiliconFlow Qwen3-VL image/PDF recognition plus clipboard adapter",
-  "components": ["recognize.py", "clipboard.py"],
-  "dependencies": {
-    "required": ["Python standard library", "SILICONFLOW_API_KEY"],
-    "optional_by_operation": ["PyMuPDF for PDF rendering", "Pillow for clipboard images"]
+  "name": "vision",
+  "version": "1.1.0",
+  "description": "Bounded image and PDF recognition through SiliconFlow Qwen3-VL with clipboard support, page batching, and usage telemetry",
+  "entrypoints": {
+    "cli": "python -m modules.vision.recognize --help",
+    "python": "python -m modules.vision.clipboard --help"
   },
-  "runtime_outputs": ["_runtime/vision/usage.jsonl", "temporary rendered PDF pages"]
+  "capabilities": [
+    {
+      "name": "vision.image_recognize",
+      "version": "1.0",
+      "description": "Recognize supported image formats through a bounded multimodal request"
+    },
+    {
+      "name": "vision.pdf_recognize",
+      "version": "1.0",
+      "description": "Render bounded PDF pages, batch recognition requests, and return page-aware output"
+    },
+    {
+      "name": "vision.clipboard",
+      "version": "1.0",
+      "description": "Read an explicitly requested clipboard image and pass it through the recognition pipeline"
+    }
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": [
+      "PyMuPDF for PDF rendering",
+      "Pillow for clipboard images"
+    ]
+  },
+  "credentials": [
+    {
+      "env": "SILICONFLOW_API_KEY",
+      "required": true,
+      "description": "Credential for the SiliconFlow Qwen3-VL recognition endpoint"
+    }
+  ],
+  "health_checks": [
+    {
+      "command": "python -c \"import modules.vision.recognize, modules.vision.clipboard\"",
+      "description": "Verify image/PDF recognition and clipboard adapters import",
+      "timeout": 30
+    }
+  ],
+  "storage": [
+    {
+      "type": "json",
+      "path": "_runtime/vision/usage.jsonl",
+      "tables": [],
+      "description": "Local request usage telemetry without credential values"
+    },
+    {
+      "type": "none",
+      "path": "",
+      "tables": [],
+      "description": "Rendered PDF pages use bounded temporary files and are deleted after processing"
+    }
+  ],
+  "experimental": false
 }
