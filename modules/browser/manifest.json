@@ -1,23 +1,59 @@
 {
   "name": "browser",
-  "version": "1.0.0",
-  "description": "Loopback-only Playwright browser daemon exposing a small HTTP API for navigation, interaction, screenshots, and JS evaluation with restorable local state",
+  "version": "1.1.0",
+  "description": "Authenticated loopback-only Playwright browser daemon with fail-closed request interception, private-network blocking, bounded interaction APIs, and restorable local state",
   "entrypoints": {
     "daemon": "python -m modules.browser.daemon"
   },
   "capabilities": [
-    {"name": "browser.automation", "version": "1.0", "description": "Drive a Chromium/Firefox/WebKit browser via a 127.0.0.1 HTTP API (navigate, click, type, screenshot, evaluate JS, scroll, tabs) with URL/selector input validation"}
+    {
+      "name": "browser.automation",
+      "version": "1.1",
+      "description": "Drive Chromium, Firefox, or WebKit through an authenticated 127.0.0.1 HTTP API; every HTTP(S) navigation and subresource request is checked by the shared outbound network policy"
+    }
   ],
   "dependencies": {
-    "required": ["Python standard library", "modules.bootstrap (activate_vendor_path)"],
+    "required": [
+      "Python standard library",
+      "modules.bootstrap (activate_vendor_path)",
+      "modules.common.security"
+    ],
     "optional": ["playwright"]
   },
-  "credentials": [],
+  "credentials": [
+    {
+      "name": "AGENT_FORGE_BROWSER_TOKEN",
+      "required": false,
+      "description": "Optional explicit bearer token; otherwise a random token is stored at _runtime/auth/browser.token"
+    }
+  ],
   "health_checks": [
-    {"command": "python -c \"import modules.browser.daemon\"", "description": "Verify browser daemon module imports", "timeout": 30}
+    {
+      "command": "python -c \"import modules.browser.daemon\"",
+      "description": "Verify the authenticated browser daemon and shared security policy import",
+      "timeout": 30
+    }
   ],
   "storage": [
-    {"type": "json", "path": "_runtime/browser/profile", "tables": [], "description": "Persisted browser storage-state.json and screenshots under _runtime/browser/"}
+    {
+      "type": "json",
+      "path": "_runtime/browser/profile",
+      "tables": [],
+      "description": "Persisted browser storage-state.json and screenshots under _runtime/browser/"
+    },
+    {
+      "type": "secret",
+      "path": "_runtime/auth/browser.token",
+      "tables": [],
+      "description": "Locally generated daemon bearer token; never printed or committed"
+    }
   ],
+  "security": {
+    "authentication": "Bearer token required for every endpoint",
+    "network": "HTTP(S) targets and subresources must resolve exclusively to public addresses; redirects are revalidated",
+    "service_workers": "blocked",
+    "websockets": "blocked by default; explicit operator override required",
+    "javascript": "arbitrary evaluation blocked by default; explicit trusted-session override required"
+  },
   "experimental": true
 }
