@@ -1,6 +1,6 @@
 """Unified Search Service with truthful success and provider telemetry.
 
-MCP, CLI, and command adapters use this service.  Pipeline completion is not
+MCP, CLI, and command adapters use this service. Pipeline completion is not
 reported as success unless usable search results exist.
 """
 from __future__ import annotations
@@ -357,9 +357,16 @@ _service_singleton: Optional[SearchService] = None
 
 
 def get_search_service() -> SearchService:
+    """Return the canonical production service without changing package layout."""
+
     global _service_singleton
     if _service_singleton is None:
-        _service_singleton = SearchService()
+        # Lazy import avoids the factory -> service import cycle during module
+        # initialization and preserves legacy tests that import search.py and
+        # orchestrator.py as top-level modules from modules/search.
+        from modules.search.factory import build_search_service
+
+        _service_singleton = build_search_service()
     return _service_singleton
 
 
