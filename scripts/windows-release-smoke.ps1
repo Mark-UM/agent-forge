@@ -10,6 +10,7 @@ $ProgressPreference = "SilentlyContinue"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $StateFile = Join-Path $ProjectRoot "_runtime\supervisor\state.json"
+$VendorLibs = Join-Path $ProjectRoot "vendor\python-libs"
 $Services = "scheduler,browser"
 $ServicePorts = @(9223, 9225)
 $Started = $false
@@ -149,6 +150,12 @@ try {
     Assert-AgentForgePortsFree
 
     if (-not $SkipDependencyInstall) {
+        # The release smoke verifies a clean, reproducible local environment.
+        # Rebuild the ignored vendor target rather than asking pip to overlay a
+        # partial or ABI-mismatched installation from an interrupted run.
+        if (Test-Path $VendorLibs) {
+            Remove-Item -LiteralPath $VendorLibs -Recurse -Force
+        }
         Invoke-AgentForgePython -Arguments @(
             "-m", "modules.bootstrap.dependencies", "install"
         )
