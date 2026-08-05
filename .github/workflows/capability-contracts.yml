@@ -24,8 +24,9 @@ env:
 
 jobs:
   contracts:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Windows capability contracts
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -40,13 +41,14 @@ jobs:
       - name: Install test runner
         run: python -m pip install --upgrade pip pytest
 
-      - name: Compile new capability modules
+      - name: Compile capability modules
         run: >-
           python -m compileall -q
-          modules/vision/reducer.py
-          modules/memory/candidates.py
-          modules/search/cache_store.py
-          modules/delivery/profiles.py
+          modules/vision
+          modules/memory
+          modules/search
+          modules/delivery
+          modules/ui_check
 
       - name: Validate manifests strictly
         run: python -m modules.registry validate --strict
@@ -54,7 +56,10 @@ jobs:
       - name: Run capability contracts
         run: >-
           python -m pytest -q
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
           modules/vision/tests/test_reducer.py
+          modules/vision/tests/test_recognize_reducer_integration.py
           modules/memory/tests/test_candidates.py
+          modules/memory/tests/test_cli.py
           modules/search/tests/test_cache_store.py
           modules/delivery/tests/test_profiles.py
