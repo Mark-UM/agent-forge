@@ -1,12 +1,12 @@
 """Unified Search Service with truthful success and provider telemetry.
 
 MCP, CLI, and command adapters use this service. Pipeline completion is not
-reported as success unless usable search results exist.
+reported as success unless usable search results exist. Production cache
+callbacks are supplied by :mod:`modules.search.factory` and backed by SQLite;
+this module no longer writes legacy JSON cache files.
 """
 from __future__ import annotations
 
-import json
-import os
 import sys
 import time
 from dataclasses import dataclass
@@ -19,6 +19,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from modules.common.run import EventType, RunRecorder, RunResult
+from modules.search.cache_store import DEFAULT_DB_PATH
 from modules.search.contracts import SearchMode, SearchRequest, SearchResult
 from modules.search.hardened_pipeline import (
     HardenedSearchPipeline,
@@ -88,43 +89,6 @@ class SearchServiceValidationError(SearchServiceError):
     pass
 
 
-_CACHE_FILE = _PROJECT_ROOT / "_runtime" / "search" / "pipeline_cache.json"
-
-
-def _load_cache() -> dict[str, Any]:
-    if not _CACHE_FILE.exists():
-        return {}
-    try:
-        data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _save_cache(cache: dict[str, Any]) -> None:
-    try:
-        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        temporary = _CACHE_FILE.with_suffix(f".json.{os.getpid()}.tmp")
-        temporary.write_text(
-            json.dumps(cache, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(temporary, _CACHE_FILE)
-    except OSError:
-        pass
-
-
-def _cache_get(key: str) -> Optional[dict]:
-    value = _load_cache().get(key)
-    return value if isinstance(value, dict) else None
-
-
-def _cache_store(key: str, entry: dict) -> None:
-    cache = _load_cache()
-    cache[key] = entry
-    _save_cache(cache)
-
-
 def _classify_execution(
     *,
     output_usable: bool,
@@ -142,7 +106,13 @@ def _classify_execution(
 
 
 class SearchService:
-    """Single production seam for Search execution."""
+    """Single production seam for Search execution.
+
+    Direct construction is intentionally cache-neutral. The canonical factory
+    supplies SQLite callbacks; tests and specialised callers may inject custom
+    callbacks. This avoids recreating a hidden JSON state source whenever a
+    service is instantiated outside the factory.
+    """
 
     def __init__(
         self,
@@ -157,9 +127,10 @@ class SearchService:
         self._registry = registry
         self._planner_fn = planner_fn
         self._verify_fn = verify_fn
-        self._cache_get_fn = cache_get_fn or _cache_get
-        self._cache_store_fn = cache_store_fn or _cache_store
+        self._cache_get_fn = cache_get_fn
+        self._cache_store_fn = cache_store_fn
         self._cache_ttl = cache_ttl_seconds
+        self._cache_repository = None
 
     def search(
         self,
@@ -296,17 +267,32 @@ class SearchService:
             )
 
     def health(self) -> dict[str, Any]:
+        repository = getattr(self, "_cache_repository", None)
+        custom_cache = (
+            self._cache_get_fn is not None
+            and self._cache_store_fn is not None
+            and repository is None
+        )
+        cache_path = Path(
+            repository.db_path if repository is not None else DEFAULT_DB_PATH
+        )
         status: dict[str, Any] = {
             "service": "search",
             "healthy": True,
             "providers": [],
             "provider_count": 0,
             "ready_provider_count": 0,
-            "cache_dir": str(_CACHE_FILE.parent),
+            "cache_backend": (
+                "sqlite" if repository is not None else "custom" if custom_cache else "disabled"
+            ),
+            "cache_path": str(cache_path),
+            "cache_dir": str(cache_path.parent),
             "cache_writable": True,
             "credentials": {
-                "SERPER_API_KEY": bool(os.environ.get("SERPER_API_KEY")),
-                "SILICONFLOW_API_KEY": bool(os.environ.get("SILICONFLOW_API_KEY")),
+                "SERPER_API_KEY": bool(__import__("os").environ.get("SERPER_API_KEY")),
+                "SILICONFLOW_API_KEY": bool(
+                    __import__("os").environ.get("SILICONFLOW_API_KEY")
+                ),
             },
             "warnings": [],
         }
@@ -328,14 +314,17 @@ class SearchService:
             status["healthy"] = False
             status["warnings"].append(f"provider registry build failed: {exc}")
 
-        try:
-            _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            test_file = _CACHE_FILE.parent / ".health_check"
-            test_file.write_text("ok", encoding="utf-8")
-            test_file.unlink()
-        except OSError:
-            status["cache_writable"] = False
-            status["warnings"].append("cache directory is not writable")
+        if repository is not None:
+            try:
+                repository.count()
+            except Exception as exc:
+                status["cache_writable"] = False
+                status["healthy"] = False
+                status["warnings"].append(f"sqlite cache unavailable: {exc}")
+        elif not custom_cache:
+            status["warnings"].append(
+                "cache disabled; use modules.search.factory for production wiring"
+            )
         return status
 
     def capabilities(self) -> list[str]:
