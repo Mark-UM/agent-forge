@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 from modules.search.cache_store import SearchCacheRepository
+from modules.search.factory import build_search_service
+from modules.search.providers import ProviderRegistry
 
 
 BASE_TIME = datetime(2026, 8, 5, 0, 0, tzinfo=timezone.utc)
@@ -185,3 +187,24 @@ def test_result_adapters_match_search_service_callbacks(tmp_path: Path) -> None:
     )
     restored = get("adapter-key")
     assert restored["results"][0]["title"] == "Result"
+
+
+def test_production_factory_uses_supplied_sqlite_repository(tmp_path: Path) -> None:
+    repository = SearchCacheRepository(tmp_path / "production-cache.db")
+    service = build_search_service(
+        registry=ProviderRegistry(),
+        planner_fn=lambda *args, **kwargs: {},
+        verify_fn=lambda *args, **kwargs: {},
+        cache_repository=repository,
+        migrate_legacy_cache=False,
+    )
+
+    payload = {
+        "results": [{"title": "Factory result"}],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    service._cache_store_fn("factory-key", payload)
+
+    assert service._cache_repository is repository
+    assert service._cache_get_fn("factory-key") == payload
+    assert repository.get_result("factory-key") is not None
