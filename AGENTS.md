@@ -9,6 +9,7 @@
 2. **`AGENTS_BASE.md`** — constitutional layer (extracted from pre-v1.5 AGENTS.md)
 3. **`AGENTS_COMPOSED.md`** — dynamically composed by `modules/prompt/composer.py` at session start
 4. **`markconfig/profile.md`** — ignored local user preferences and background
+5. **`_docs/AI_MAINTAINER_PLAYBOOK.md`** — read only when maintaining Agent Forge itself; update it only with verified reusable lessons and never with secrets or personal data
 
 ## Top Priority Directive
 
@@ -142,6 +143,7 @@ Rules:
 - Prompt library: `.opencode/prompts/` (v1.5)
 - Prompt composer: `modules/prompt/composer.py` (v1.5)
 - Composition log: `_runtime/prompt/composition_log.jsonl` (v1.5)
+- AI maintenance lessons: `_docs/AI_MAINTAINER_PLAYBOOK.md`
 
 ## Personal Context
 
