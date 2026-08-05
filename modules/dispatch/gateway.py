@@ -1,10 +1,10 @@
 """Unified DeepSeek-compatible model gateway.
 
-All direct model requests should pass through this module so routing, secret
-handling, input redaction, timeouts, retries, telemetry, and result semantics
-remain consistent across Prompt, Search, Orchestrator, and review workflows.
+All direct model requests pass through this module so routing, secret handling,
+input redaction, timeouts, retries, telemetry, and result semantics remain
+consistent across Prompt, Search, Orchestrator, and review workflows.
 
-The gateway uses only the Python standard library and the shared Agent Forge
+The gateway uses only the Python standard library and shared Agent Forge
 security/Run primitives.
 """
 from __future__ import annotations
@@ -32,6 +32,8 @@ DEFAULT_TIMEOUT_SECONDS = 90.0
 DEFAULT_MAX_RETRIES = 2
 MAX_MESSAGE_CHARS = 500_000
 MAX_RESPONSE_BYTES = 5_000_000
+MAX_METADATA_STRING_CHARS = 2_000
+MAX_METADATA_DEPTH = 4
 PRO_MODEL = "deepseek-reasoner"
 FLASH_MODEL = "deepseek-chat"
 
@@ -54,6 +56,7 @@ FLASH_TASKS = frozenset(
         "classify",
         "classification",
         "scoring",
+        "quality_scoring",
         "i18n",
         "summarize",
         "summary",
@@ -79,9 +82,31 @@ _SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{12,}=*"),
     re.compile(
-        r"(?i)(api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*([^\s,;]{6,})"
+        r"(?i)\b(api[\s_-]*key|access[\s_-]*token|secret|password)\b"
+        r"\s*[:=]\s*([^\s,;]{6,})"
     ),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 )
+_SENSITIVE_METADATA_KEYS = frozenset(
+    {
+        "authorization",
+        "api_key",
+        "apikey",
+        "token",
+        "access_token",
+        "password",
+        "secret",
+        "prompt",
+        "content",
+        "message",
+        "messages",
+        "body",
+        "raw",
+    }
+)
+_RESERVED_EXTRA_BODY_KEYS = frozenset({"model", "messages", "stream"})
 
 
 class ModelGatewayError(RuntimeError):
@@ -106,6 +131,7 @@ class GatewayRequest:
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_MAX_RETRIES
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    extra_body: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -144,8 +170,7 @@ Transport = Callable[[str, Mapping[str, str], bytes, float], dict[str, Any]]
 def route_model(task_type: str, requested_model: Optional[str] = None) -> str:
     """Choose the canonical Pro/Flash model for a task.
 
-    Explicit model requests are accepted only for the two supported DeepSeek
-    models, preventing arbitrary endpoint/model drift through business modules.
+    Explicit requests are accepted only for the two supported DeepSeek models.
     Unknown task types fail safe to Pro.
     """
 
@@ -196,10 +221,57 @@ def redact_text(text: str, *, env: Mapping[str, str] | None = None) -> str:
         redacted = redacted.replace(secret, "[REDACTED]")
     for pattern in _SECRET_PATTERNS:
         if pattern.groups >= 2:
-            redacted = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]", redacted)
+            redacted = pattern.sub(
+                lambda match: f"{match.group(1)}=[REDACTED]", redacted
+            )
         else:
             redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
+
+
+def _sanitize_telemetry_value(
+    value: Any,
+    *,
+    env: Mapping[str, str],
+    depth: int = 0,
+) -> Any:
+    """Return a bounded, JSON-safe value suitable for local Run telemetry."""
+
+    if depth > MAX_METADATA_DEPTH:
+        return "[TRUNCATED]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return redact_text(value, env=env)[:MAX_METADATA_STRING_CHARS]
+    if isinstance(value, Mapping):
+        output: dict[str, Any] = {}
+        for raw_key, child in value.items():
+            key = str(raw_key)[:200]
+            if key.strip().lower() in _SENSITIVE_METADATA_KEYS:
+                output[key] = "[REDACTED]"
+            else:
+                output[key] = _sanitize_telemetry_value(
+                    child, env=env, depth=depth + 1
+                )
+        return output
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [
+            _sanitize_telemetry_value(item, env=env, depth=depth + 1)
+            for item in list(value)[:100]
+        ]
+    return redact_text(str(value), env=env)[:MAX_METADATA_STRING_CHARS]
+
+
+def sanitize_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        raise ModelGatewayValidationError("metadata must be an object")
+    environment = os.environ if env is None else env
+    sanitized = _sanitize_telemetry_value(metadata, env=environment)
+    return dict(sanitized) if isinstance(sanitized, Mapping) else {}
 
 
 def normalize_messages(
@@ -306,6 +378,23 @@ def _validate_request(request: GatewayRequest) -> None:
         raise ModelGatewayValidationError(
             "max_tokens must be between 1 and 131072"
         )
+    if not isinstance(request.extra_body, Mapping):
+        raise ModelGatewayValidationError("extra_body must be an object")
+    conflicting = {
+        str(key) for key in request.extra_body if str(key) in _RESERVED_EXTRA_BODY_KEYS
+    }
+    if conflicting:
+        raise ModelGatewayValidationError(
+            "extra_body cannot override reserved keys: "
+            + ", ".join(sorted(conflicting))
+        )
+    try:
+        json.dumps(dict(request.extra_body), ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise ModelGatewayValidationError(
+            "extra_body must be JSON serializable"
+        ) from exc
+    sanitize_metadata(request.metadata)
 
 
 def _extract_content(payload: Mapping[str, Any]) -> str:
@@ -375,6 +464,7 @@ class ModelGateway:
             payload["temperature"] = request.temperature
         if request.max_tokens is not None:
             payload["max_tokens"] = request.max_tokens
+        payload.update(dict(request.extra_body))
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -386,13 +476,14 @@ class ModelGateway:
         timestamp = datetime.now(timezone.utc).isoformat()
         recorder: Optional[RunRecorder] = None
         if record_run:
+            safe_metadata = sanitize_metadata(request.metadata, env=self._env)
             recorder = RunRecorder(
                 run_type="model",
                 metadata={
                     "task_type": request.task_type,
                     "model": model,
                     "message_count": len(messages),
-                    **dict(request.metadata),
+                    **safe_metadata,
                 },
             )
             recorder.__enter__()
@@ -494,10 +585,11 @@ class ModelGateway:
             if recorder is not None:
                 recorder.__exit__(type(exc), exc, exc.__traceback__)
                 run_result = recorder.result
+            safe_error = redact_text(str(exc), env=self._env)
             return GatewayResponse(
                 success=False,
                 model=model,
-                error=str(exc),
+                error=safe_error,
                 error_code=(
                     "retryable_model_error" if _retryable(exc) else "model_error"
                 ),
@@ -518,6 +610,7 @@ def invoke(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
     metadata: Optional[Mapping[str, Any]] = None,
+    extra_body: Optional[Mapping[str, Any]] = None,
     record_run: bool = True,
 ) -> GatewayResponse:
     """Convenience entrypoint used by business modules."""
@@ -532,6 +625,7 @@ def invoke(
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             metadata=metadata or {},
+            extra_body=extra_body or {},
         ),
         record_run=record_run,
     )
@@ -551,4 +645,5 @@ __all__ = [
     "normalize_messages",
     "redact_text",
     "route_model",
+    "sanitize_metadata",
 ]
