@@ -7,9 +7,11 @@ Default backend order:
 2. fail-closed secure Fetch for static content.
 
 The legacy ``browser-use`` backend is selected only when its first availability
-check sees ``AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE=1``.  The cached boolean
-remains externally controllable for backward-compatible tests and explicit
-in-process dependency injection.
+check sees ``AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE=1``. It accepts only the
+upstream Browser Use or Anthropic clients; DeepSeek requests must use Agent
+Forge Model Gateway and are therefore not passed through this unguarded backend.
+The cached boolean remains externally controllable for backward-compatible
+tests and explicit in-process dependency injection.
 """
 from __future__ import annotations
 
@@ -70,7 +72,7 @@ def _check_browser_use() -> bool:
     """Return the cached selectable state for the browser-use backend.
 
     A caller that explicitly sets ``_BROWSER_USE_AVAILABLE`` retains the legacy
-    cache contract.  On first detection, installation alone is insufficient:
+    cache contract. On first detection, installation alone is insufficient:
     the reduced-security override must also be enabled.
     """
 
@@ -193,8 +195,16 @@ def _summarize_content(content: str, query: str = "") -> str:
     try:
         from modules.search.aggregator import aggregate_results
 
-        results = [{"title": "Collected Content", "snippet": bounded, "url": ""}]
-        aggregated = aggregate_results(results, query=query)
+        result_group = [{
+            "sub_query": query or "collected content",
+            "results": [{
+                "title": "Collected Content",
+                "snippet": bounded,
+                "url": "",
+                "source": "collection",
+            }],
+        }]
+        aggregated = aggregate_results(query or "summarize collected content", result_group)
         if isinstance(aggregated, dict):
             return aggregated.get("markdown", str(aggregated))
         return str(aggregated)
@@ -230,15 +240,15 @@ def _atomic_write(filepath: str, content: str) -> None:
 def _create_browser_use_agent(target: str, task: str):
     target = _validate_target(target)
     browser_use_key = os.environ.get("BROWSER_USE_API_KEY", "").strip()
-    deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     anthropic_key = (
         os.environ.get("ANTHROPIC_API_KEY", "").strip()
         or os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
     )
-    if not (browser_use_key or deepseek_key or anthropic_key):
+    if not (browser_use_key or anthropic_key):
         raise RuntimeError(
-            "browser-use requires BROWSER_USE_API_KEY, DEEPSEEK_API_KEY, "
-            "or ANTHROPIC_API_KEY"
+            "browser-use requires BROWSER_USE_API_KEY or ANTHROPIC_API_KEY. "
+            "DeepSeek-backed collection must use the guarded Browser daemon and "
+            "Agent Forge Model Gateway, not this reduced-security backend."
         )
     if not _env_bool("AGENT_FORGE_ALLOW_UNGUARDED_BROWSER_USE", False):
         raise RuntimeError(
@@ -252,14 +262,6 @@ def _create_browser_use_agent(target: str, task: str):
         llm = ChatBrowserUse(
             model=os.environ.get("BROWSER_USE_MODEL", "bu-2-0"),
             api_key=browser_use_key,
-        )
-    elif deepseek_key:
-        from browser_use import ChatOpenAI
-
-        llm = ChatOpenAI(
-            model=os.environ.get("BROWSER_USE_MODEL", "deepseek-chat"),
-            api_key=deepseek_key,
-            base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         )
     else:
         from browser_use import ChatAnthropic
