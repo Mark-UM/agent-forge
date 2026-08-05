@@ -54,8 +54,16 @@ def invoke_with_urlopen(
             headers=dict(headers),
             method="POST",
         )
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except TimeoutError as exc:
+            # Bare TimeoutError stringifies to an empty value. Preserve a
+            # stable diagnostic so legacy callers can retain timeout-specific
+            # fallback messages while the Gateway still owns semantics.
+            raise TimeoutError(
+                f"model transport timeout after {timeout:g}s"
+            ) from exc
         if not isinstance(payload, dict):
             raise RuntimeError("model response must be a JSON object")
         return payload
