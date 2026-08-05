@@ -4,7 +4,8 @@
 The historical single-file implementation is imported as a private compatibility
 module so its log/history/health/CLI contracts remain stable. Cache functions
 are replaced at module load: legacy JSON is read only for one-time migration;
-all new cache writes, reads and pruning use :class:`SearchCacheRepository`.
+all default-path cache writes, reads and pruning use
+:class:`SearchCacheRepository`.
 """
 from __future__ import annotations
 
@@ -12,7 +13,6 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
-import sys
 from typing import Any, Mapping
 
 try:
@@ -22,33 +22,36 @@ except ImportError:
 
 from modules.search.cache_store import DEFAULT_DB_PATH, SearchCacheRepository
 
-# Re-export the historical public API before overriding the cache seam.
 for _name in dir(_legacy):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_legacy, _name)
 
 LEGACY_CACHE_FILE = os.path.join(_legacy._LOG_DIR, "search_cache.json")
-CACHE_FILE = str(DEFAULT_DB_PATH)
+_DEFAULT_CACHE_FILE = str(DEFAULT_DB_PATH)
+CACHE_FILE = _DEFAULT_CACHE_FILE
 CACHE_TTL = int(_legacy.CACHE_TTL)
 _CACHE_PREFIX = "history-cli:"
 _CACHE_REPOSITORY: SearchCacheRepository | None = None
+_CACHE_REPOSITORY_PATH: Path | None = None
 
 
 def _repository() -> SearchCacheRepository:
-    global _CACHE_REPOSITORY
-    if _CACHE_REPOSITORY is None:
-        _CACHE_REPOSITORY = SearchCacheRepository(Path(CACHE_FILE))
-        # Import-only migration. The legacy file is never rewritten or deleted.
-        _CACHE_REPOSITORY.migrate_json_file(
-            Path(LEGACY_CACHE_FILE),
-            ttl_seconds=CACHE_TTL,
-            migration_name="legacy_search_history_cache",
-        )
+    global _CACHE_REPOSITORY, _CACHE_REPOSITORY_PATH
+    current_path = Path(CACHE_FILE)
+    if _CACHE_REPOSITORY is None or _CACHE_REPOSITORY_PATH != current_path:
+        _CACHE_REPOSITORY = SearchCacheRepository(current_path)
+        _CACHE_REPOSITORY_PATH = current_path
+        if current_path.resolve() == Path(DEFAULT_DB_PATH).resolve():
+            _CACHE_REPOSITORY.migrate_json_file(
+                Path(LEGACY_CACHE_FILE),
+                ttl_seconds=CACHE_TTL,
+                migration_name="legacy_search_history_cache",
+            )
     return _CACHE_REPOSITORY
 
 
 def _load_cache() -> dict[str, Any]:
-    """Read the old JSON format for compatibility; never use it for writes."""
+    """Read the old JSON format for migration/debug compatibility only."""
     if not os.path.isfile(LEGACY_CACHE_FILE):
         return {}
     try:
@@ -73,10 +76,40 @@ def _coerce_retrieved_at(entry: Mapping[str, Any]) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _atomic_json_compat_write(cache: Mapping[str, Any], path: Path) -> None:
+    """Support historical tests/tools that explicitly inject a JSON path.
+
+    The default production path is SQLite. This branch is reachable only after
+    a caller deliberately replaces ``CACHE_FILE`` with a non-default ``.json``
+    path, preserving the old atomic-write contract without recreating the
+    retired production state source.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(str(path) + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(dict(cache), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _save_cache(cache: Mapping[str, Any]) -> None:
-    """Compatibility bulk import into SQLite; never create JSON cache files."""
     if not isinstance(cache, Mapping):
         return
+    current_path = Path(CACHE_FILE)
+    if (
+        current_path.suffix.lower() == ".json"
+        and current_path.resolve() != Path(DEFAULT_DB_PATH).resolve()
+    ):
+        _atomic_json_compat_write(cache, current_path)
+        return
+
     repository = _repository()
     for raw_key, raw_entry in cache.items():
         if not isinstance(raw_entry, Mapping):
@@ -159,8 +192,6 @@ def cache_store(
         repository.prune()
 
 
-# Historical functions resolve these names in legacy_search.__dict__, so patch
-# that namespace as well as the public wrapper namespace.
 for _name, _value in {
     "CACHE_FILE": CACHE_FILE,
     "_load_cache": _load_cache,
