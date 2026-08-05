@@ -4,7 +4,8 @@
 The check is intentionally narrow and cheap. It does not police networking in
 general; it only prevents DeepSeek endpoint ownership from spreading back into
 Prompt, Search, Orchestrator, or other business modules. The canonical gateway
-is the sole allow-listed source file.
+owns transport; this checker is allow-listed only because it necessarily stores
+the endpoint-detection regexes themselves.
 """
 from __future__ import annotations
 
@@ -16,7 +17,12 @@ from typing import Iterable, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULES_ROOT = PROJECT_ROOT / "modules"
-ALLOWED_PATHS = frozenset({Path("modules/dispatch/gateway.py")})
+ALLOWED_PATHS = frozenset(
+    {
+        Path("modules/dispatch/gateway.py"),
+        Path("modules/dispatch/no_bypass.py"),
+    }
+)
 FORBIDDEN_PATTERNS = (
     ("deepseek endpoint domain", re.compile(r"api\.deepseek\.com", re.IGNORECASE)),
     (
@@ -74,10 +80,11 @@ def scan_model_bypasses(
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        lines = text.splitlines()
         for rule, pattern in FORBIDDEN_PATTERNS:
             for match in pattern.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1
-                source_line = text.splitlines()[line - 1].strip()
+                source_line = lines[line - 1].strip() if line <= len(lines) else ""
                 findings.append(
                     BypassFinding(
                         path=relative,
