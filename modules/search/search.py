@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sys
 from typing import Any, Mapping
 
 try:
@@ -54,13 +55,23 @@ def _repository() -> SearchCacheRepository:
     return _CACHE_REPOSITORY
 
 
+def _explicit_json_path() -> Path | None:
+    current_path = Path(CACHE_FILE)
+    if (
+        current_path.suffix.lower() == ".json"
+        and current_path.resolve() != Path(DEFAULT_DB_PATH).resolve()
+    ):
+        return current_path
+    return None
+
+
 def _load_cache() -> dict[str, Any]:
-    """Read the old JSON format for migration/debug compatibility only."""
-    if not os.path.isfile(LEGACY_CACHE_FILE):
+    """Read an explicitly injected JSON cache or the import-only legacy file."""
+    source = _explicit_json_path() or Path(LEGACY_CACHE_FILE)
+    if not source.is_file():
         return {}
     try:
-        with open(LEGACY_CACHE_FILE, "r", encoding="utf-8") as handle:
-            value = json.load(handle)
+        value = json.loads(source.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
@@ -81,13 +92,7 @@ def _coerce_retrieved_at(entry: Mapping[str, Any]) -> str:
 
 
 def _atomic_json_compat_write(cache: Mapping[str, Any], path: Path) -> None:
-    """Support historical tests/tools that explicitly inject a JSON path.
-
-    The default production path is SQLite. This branch is reachable only after
-    a caller deliberately replaces ``CACHE_FILE`` with a non-default ``.json``
-    path, preserving the old atomic-write contract without recreating the
-    retired production state source.
-    """
+    """Atomically write an explicitly injected compatibility JSON path."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(str(path) + ".tmp")
     try:
@@ -106,12 +111,15 @@ def _atomic_json_compat_write(cache: Mapping[str, Any], path: Path) -> None:
 def _save_cache(cache: Mapping[str, Any]) -> None:
     if not isinstance(cache, Mapping):
         return
-    current_path = Path(CACHE_FILE)
-    if (
-        current_path.suffix.lower() == ".json"
-        and current_path.resolve() != Path(DEFAULT_DB_PATH).resolve()
-    ):
-        _atomic_json_compat_write(cache, current_path)
+    explicit_json = _explicit_json_path()
+    if explicit_json is not None:
+        try:
+            _atomic_json_compat_write(cache, explicit_json)
+        except OSError as exc:
+            # Cache persistence is best effort. Preserve the historical
+            # non-fatal contract while the helper's finally block removes the
+            # temporary file after a failed Windows os.replace operation.
+            print(f"警告: cache 写入失败: {exc}", file=sys.stderr)
         return
 
     repository = _repository()
@@ -133,6 +141,28 @@ def _cache_record_key(query: str, location: str, layer_hint: str = "") -> str:
 
 
 def cache_get(args) -> int:
+    explicit_json = _explicit_json_path()
+    if explicit_json is not None:
+        entry = _load_cache().get(
+            _legacy._cache_key(
+                args.query,
+                args.location or "unknown",
+                args.layer_hint or "",
+            )
+        )
+        if not isinstance(entry, Mapping):
+            return 0
+        print(json.dumps({
+            "hit": True,
+            "query": entry.get("query", ""),
+            "layers_used": entry.get("layers_used", []),
+            "results_count": entry.get("results_count", 0),
+            "top_results": entry.get("top_results", [])[:10],
+            "score": entry.get("score", 0),
+            "cached_at": entry.get("cached_at"),
+        }, ensure_ascii=False, indent=2))
+        return 0
+
     record = _repository().get_result(
         _cache_record_key(
             args.query,
@@ -158,6 +188,21 @@ def cache_get(args) -> int:
 
 def cache_clean(args) -> int:
     del args
+    explicit_json = _explicit_json_path()
+    if explicit_json is not None:
+        now = datetime.now(timezone.utc).timestamp()
+        cache = _load_cache()
+        retained = {
+            key: value
+            for key, value in cache.items()
+            if isinstance(value, Mapping)
+            and now - float(value.get("cached_at", 0)) <= CACHE_TTL
+        }
+        deleted = len(cache) - len(retained)
+        _save_cache(retained)
+        print(f"已清理 {deleted} 条过期缓存，剩余 {len(retained)} 条")
+        return 0
+
     repository = _repository()
     deleted = repository.prune()
     remaining = repository.count(namespace="result")
@@ -177,6 +222,20 @@ def cache_store(
     top_results,
     score,
 ):
+    explicit_json = _explicit_json_path()
+    if explicit_json is not None:
+        cache = _load_cache()
+        cache[_legacy._cache_key(query, location, layer_hint)] = {
+            "query": query,
+            "layers_used": list(layers_used or []),
+            "results_count": max(0, int(results_count or 0)),
+            "top_results": list(top_results or [])[:10],
+            "score": float(score or 0),
+            "cached_at": datetime.now(timezone.utc).timestamp(),
+        }
+        _save_cache(cache)
+        return
+
     now = datetime.now(timezone.utc).isoformat()
     repository = _repository()
     repository.put_result(
