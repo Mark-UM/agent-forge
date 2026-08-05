@@ -1,23 +1,42 @@
 {
   "name": "ui_check",
-  "version": "1.0.0",
-  "description": "UI component architecture enforcer running 5 rules (directories, panel_classes, inline_onclick, window_globals, uimanager_i18n) against the UI layer",
+  "version": "2.0.0",
+  "description": "Profile-aware UI architecture checks that remain inactive for unrelated projects and activate TypeScript/Vite, Three.js, or Tower Stack rules only from project evidence or explicit profile selection",
   "entrypoints": {
-    "cli": "python -m modules.ui_check.enforcer"
+    "cli": "python -m modules.ui_check.profiled",
+    "python": "python -m modules.ui_check.enforcer --help"
   },
   "capabilities": [
-    {"name": "ui_check.enforcer", "version": "1.0", "description": "Run 5 UI architecture rules with whitelists and emit PASS/FAIL findings with Markdown/JSON output (enforcer.py)"}
+    {
+      "name": "ui_check.profiled",
+      "version": "2.0",
+      "description": "Delegate UI validation to the canonical Delivery profile engine"
+    },
+    {
+      "name": "ui_check.legacy_enforcer",
+      "version": "1.0",
+      "description": "Explicit compatibility entry for the historical five-rule UI enforcer"
+    }
   ],
   "dependencies": {
-    "required": ["Python standard library"],
+    "required": ["Python standard library", "modules.delivery.profiles"],
     "optional": []
   },
   "credentials": [],
   "health_checks": [
-    {"command": "python -m modules.ui_check.enforcer --help", "description": "Verify UI enforcer CLI loads", "timeout": 30}
+    {
+      "command": "python -m modules.ui_check.profiled --help",
+      "description": "Verify the profile-aware UI entrypoint loads",
+      "timeout": 30
+    }
   ],
   "storage": [
-    {"type": "none", "path": "", "tables": [], "description": "No persistent storage; reports are printed to stdout"}
+    {
+      "type": "none",
+      "path": "",
+      "tables": [],
+      "description": "No persistent storage; structured reports are printed to stdout"
+    }
   ],
   "experimental": false
 }
