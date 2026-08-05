@@ -48,8 +48,16 @@ _SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{12,}=*"),
     re.compile(
-        r"(?i)(api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*([^\s,;]{6,})"
+        r"(?i)\b(api[\s_-]*key|access[\s_-]*token|secret|password)\b"
+        r"\s*[:=]\s*([^\s,;]{6,})"
     ),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(
+        r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\."
+        r"[A-Za-z0-9_-]{10,}\b"
+    ),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 )
 
 
@@ -237,7 +245,16 @@ def add_candidate(
     candidate_source = _normalise_source(source)
     if not 1 <= int(ttl_days) <= 365:
         raise ValueError("ttl_days must be between 1 and 365")
-    matches = sensitive_matches(value, env=env)
+    metadata_dict = dict(metadata or {})
+    try:
+        metadata_json = json.dumps(metadata_dict, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("metadata must be JSON serializable") from exc
+    # Content, provenance and metadata all become durable. Validate the complete
+    # persistence envelope before opening SQLite so rejected candidates leave no
+    # database artefact behind.
+    sensitive_envelope = "\n".join((value, candidate_source, metadata_json))
+    matches = sensitive_matches(sensitive_envelope, env=env)
     if matches:
         raise SensitiveMemoryError(
             "candidate contains sensitive material and was not persisted: "
@@ -246,7 +263,6 @@ def add_candidate(
     candidate_hash = _content_hash(candidate_kind, value)
     now = _utc_now()
     expires = now + timedelta(days=int(ttl_days))
-    metadata_json = json.dumps(dict(metadata or {}), ensure_ascii=False)
     init_candidate_store(db_path)
     with _connection(db_path) as connection:
         row = connection.execute(
