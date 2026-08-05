@@ -24,8 +24,9 @@ env:
 
 jobs:
   contracts:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Windows Gateway and Supervisor contracts
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -46,8 +47,14 @@ jobs:
       - name: Validate manifests strictly
         run: python -m modules.registry validate --strict
 
-      - name: Run gateway and supervisor contracts
+      - name: Enforce Model Gateway ownership
+        run: python -m modules.dispatch.no_bypass
+
+      - name: Run Gateway and Supervisor contracts
         run: >-
           python -m pytest -q
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
           modules/dispatch/tests/test_gateway.py
+          modules/dispatch/tests/test_no_bypass.py
+          modules/dispatch/tests/test_phase2_guard.py
           modules/runtime/tests/test_supervisor.py
