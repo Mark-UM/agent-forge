@@ -12,6 +12,9 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $StateFile = Join-Path $ProjectRoot "_runtime\supervisor\state.json"
 $Services = "scheduler,browser"
 $Started = $false
+$PrimaryFailure = $null
+$CleanupFailure = $null
+$StatusOutput = $null
 
 function Invoke-AgentForgePython {
     param(
@@ -21,7 +24,10 @@ function Invoke-AgentForgePython {
 
     & $Python @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Python command failed with exit code $LASTEXITCODE: $Python $($Arguments -join ' ')"
+        throw (
+            "Python command failed with exit code {0}: {1} {2}" -f `
+                $LASTEXITCODE, $Python, ($Arguments -join " ")
+        )
     }
 }
 
@@ -91,15 +97,41 @@ try {
         }
     }
 
-    Write-Host "Windows release smoke: PASS"
-    Write-Host $StatusOutput
+}
+catch {
+    $PrimaryFailure = $_
 }
 finally {
     if ($Started -or (Test-Path $StateFile)) {
-        & $Python -m modules.runtime.supervisor stop --json
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Supervisor cleanup exited with code $LASTEXITCODE"
+        try {
+            & $Python -m modules.runtime.supervisor stop --json
+            if ($LASTEXITCODE -ne 0) {
+                throw (
+                    "Supervisor cleanup failed with exit code {0}" -f `
+                        $LASTEXITCODE
+                )
+            }
+        }
+        catch {
+            $CleanupFailure = $_
         }
     }
     Pop-Location
 }
+
+if ($null -ne $PrimaryFailure) {
+    if ($null -ne $CleanupFailure) {
+        throw (
+            "Windows release smoke failed: {0} Cleanup also failed: {1}" -f `
+                $PrimaryFailure.Exception.Message,
+                $CleanupFailure.Exception.Message
+        )
+    }
+    throw $PrimaryFailure
+}
+if ($null -ne $CleanupFailure) {
+    throw $CleanupFailure
+}
+
+Write-Host "Windows release smoke: PASS"
+Write-Host $StatusOutput

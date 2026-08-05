@@ -130,6 +130,16 @@ A test that starts a background scheduler thread must wait for its returned
 down. Otherwise later tests receive misleading thread exceptions against a
 removed database.
 
+### Validate Windows release scripts with Windows PowerShell 5.1
+
+In Windows PowerShell, a variable followed immediately by a colon must use
+`$()`, `${}`, or the format operator so the Parser cannot treat the colon as
+part of the variable reference. Validate Windows release scripts with the
+`powershell.exe` 5.1 Parser, not only `pwsh`. Claim the Windows Release Smoke is
+green only after the complete locked Vendor install, Chromium install, and
+authenticated Supervisor service lifecycle has actually passed, including
+process cleanup.
+
 ## Week 0 completion checklist
 
 - [ ] Latest Windows fast contracts pass.
