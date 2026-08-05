@@ -14,6 +14,7 @@ import argparse
 import urllib.request
 
 from modules.dispatch.compat import invoke_with_urlopen
+from modules.dispatch.gateway import DEFAULT_BASE_URL
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -27,6 +28,10 @@ except ImportError:
     def _redact_outbound(text):
         return text, {'redacted_count': 0}
 
+# Historical read-only compatibility constant. Request construction is owned by
+# Model Gateway; this value is retained only for callers/tests that inspect the
+# legacy module surface.
+_FLASH_API = DEFAULT_BASE_URL
 _FLASH_MODEL = 'deepseek-chat'
 _FLASH_TIMEOUT = 15
 _FLASH_MAX_TOKENS = 100
@@ -119,7 +124,9 @@ def _gateway_error(error, timeout):
         return f'Flash API timeout after {timeout}s'
     if 'urlopen error' in lowered or 'url error' in lowered:
         return f'Flash API URL error: {text}'
-    return text
+    if 'no choices' in lowered or 'content is not a string' in lowered:
+        return f'Flash API response parse failed: {text}'
+    return f'RuntimeError: {text}'
 
 
 def translate_query(query, target_lang, api_key=None, timeout=_FLASH_TIMEOUT):
