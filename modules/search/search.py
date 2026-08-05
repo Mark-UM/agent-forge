@@ -6,6 +6,10 @@ module so its log/history/health/CLI contracts remain stable. Cache functions
 are replaced at module load: legacy JSON is read only for one-time migration;
 all default-path cache writes, reads and pruning use
 :class:`SearchCacheRepository`.
+
+A few historical tests and local scripts monkeypatch module globals such as
+``_LOG_DIR`` or ``_today_log_file``. Public wrappers synchronize those explicit
+in-process overrides into the private compatibility module before delegation.
 """
 from __future__ import annotations
 
@@ -192,6 +196,44 @@ def cache_store(
         repository.prune()
 
 
+def _sync_legacy_names(*names: str) -> None:
+    for name in names:
+        if name in globals():
+            setattr(_legacy, name, globals()[name])
+
+
+def _load_entries_from_files(files):
+    _sync_legacy_names("_LOG_DIR", "HISTORY_LOG")
+    return _legacy._load_entries_from_files(files)
+
+
+def filter_history_results(args):
+    _sync_legacy_names("_LOG_DIR", "HISTORY_LOG", "_all_log_files")
+    return _legacy.filter_history_results(args)
+
+
+def query_history(args):
+    _sync_legacy_names("_LOG_DIR", "HISTORY_LOG", "_all_log_files")
+    return _legacy.query_history(args)
+
+
+def log_search(args):
+    _sync_legacy_names(
+        "_RUNTIME_DIR",
+        "_LOG_DIR",
+        "HISTORY_LOG",
+        "_ensure_log_dir",
+        "_today_log_file",
+        "cache_store",
+    )
+    return _legacy.log_search(args)
+
+
+def save_memory(args):
+    _sync_legacy_names("_LOG_DIR", "HISTORY_LOG", "_all_log_files")
+    return _legacy.save_memory(args)
+
+
 for _name, _value in {
     "CACHE_FILE": CACHE_FILE,
     "_load_cache": _load_cache,
@@ -205,6 +247,17 @@ for _name, _value in {
 
 
 def main() -> int:
+    _sync_legacy_names(
+        "_RUNTIME_DIR",
+        "_LOG_DIR",
+        "HISTORY_LOG",
+        "_ensure_log_dir",
+        "_today_log_file",
+        "_all_log_files",
+        "cache_store",
+        "cache_get",
+        "cache_clean",
+    )
     return int(_legacy._cli() or 0)
 
 
