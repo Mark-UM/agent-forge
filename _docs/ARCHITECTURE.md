@@ -1,185 +1,336 @@
-# AgentForge Architecture
+# Agent Forge Architecture
 
-Status date: 2026-08-04. This is the maintained architecture reference.
+Status: pre-2.0 foundation, Windows-first.
 
-## System boundary
+This document describes current executable behavior. Archived version plans are
+historical design inputs and are not implementation status.
 
-AgentForge is a local OpenCode workspace, not a hosted application. OpenCode
-owns the interactive agent runtime; this repository supplies policy, extension
-definitions, Python libraries/processes, and local-state conventions.
+## 1. Product shape
 
-```mermaid
-flowchart TD
-    L["start-opencode.bat"] --> D["Python 3.11 + dependency import gate"]
-    D --> P["Prompt composer"]
-    P --> O["OpenCode"]
-    O --> C["Markdown commands"]
-    O --> A["Read-only review agents"]
-    O --> T["TypeScript custom tools"]
-    O --> M["Configured MCP providers"]
-    C --> PY["Python modules and CLIs"]
-    T --> B["Browser daemon :9223"]
-    T --> V["Vision / SiliconFlow"]
-    PY --> S["Scheduler daemon :9225"]
-    PY --> R["Ignored runtime state"]
-    PY --> X["Ignored vendor/python-libs"]
+Agent Forge is a local Agent workspace rather than a hosted Agent platform. It
+combines OpenCode interaction, Python capability services, MCP adapters, local
+state, and a small number of supervised loopback processes.
+
+```text
+Interaction layer
+  OpenCode, Slash Commands, MCP, standalone CLIs
+                       |
+Service layer
+  Model Gateway, Search Service, Collection, Scheduler, Memory, Delivery
+                       |
+Capability layer
+  Providers, Browser, Vision, Fetch, Indexing, static checks
+                       |
+Runtime/state layer
+  SQLite, private Markdown, logs, reports, browser state, Vendor environment
 ```
 
-External boundaries include model/API providers, GitHub, Context7, SearXNG,
-Serper, arXiv, Semantic Scholar, npm/PyPI, Chromium, and optional upstream skill
-repositories. Configuration cannot guarantee external availability.
+The design goal is one production entry point and one authoritative state source
+per capability, with lightweight compatibility adapters where old callers still
+exist.
 
-## Startup and dependency boundary
+## 2. Startup and lifecycle
 
-`start-opencode.bat` resolves the repository from `%~dp0`, selects `python` or
-`AGENT_FORGE_PYTHON`, requires Python 3.11, prepends
-`vendor/python-libs` to `PYTHONPATH`, performs real dependency imports, reads
-ignored secrets without printing them, composes `AGENTS_COMPOSED.md`, and starts
-OpenCode. It does not start Browser or Scheduler daemons.
+`start-opencode.bat` is the supported Windows launcher.
 
-`modules.bootstrap.dependencies` is the single Python dependency activation and
-installation contract. Direct runtime requirements are pinned in
-`requirements.txt`; the transitive environment is pinned in
-`requirements.lock.txt`. Installations target ignored `vendor/python-libs` and
-record the interpreter cache tag. Health is based on imports, not dist-info
-presence, preventing empty namespace directories and wrong-ABI native modules
-from appearing healthy.
+```text
+Python 3.11 validation
+        |
+Vendor dependency/ABI validation
+        |
+ignored secrets/profile loading
+        |
+Prompt Context detection and composition
+        |
+Runtime Supervisor
+   +----+------------------+
+   |                       |
+Browser daemon        Scheduler daemon
+   |                       |
+   +-----------+-----------+
+               |
+         OpenCode foreground
+```
 
-## OpenCode extension plane
+The Supervisor:
 
-`opencode.json` defines two DeepSeek models, three plugin references, repository
-permissions, three instruction paths, and sixteen MCPs.
+- generates or loads local bearer tokens without logging their values;
+- detects port conflicts;
+- adopts an already-running authenticated service without claiming ownership;
+- starts missing services and waits for authenticated health;
+- records non-secret PID/log state;
+- applies bounded restart policy while running a foreground command;
+- stops only services that it owns.
 
-| MCP | Configured state | Runtime |
-|---|---|---|
-| filesystem | enabled | npm, repository scope |
-| github | enabled | npm, token inherited when exported |
-| context7 | enabled | remote HTTP |
-| sequential-thinking | enabled | npm |
-| memory | enabled | npm, `_runtime/mcp-memory.json` |
-| playwright | enabled | npm |
-| fetch | enabled | `modules.mcp.fetch_mcp` |
-| sqlite | enabled | `modules.mcp.sqlite_mcp`, read-only by default |
-| time | enabled | `modules.mcp.time_mcp` |
-| git | enabled | pinned `mcp-server-git` in local Python environment |
-| duckduckgo | disabled | external Python definition retained |
-| searxng | enabled | npm, fixed public URL |
-| g-search | disabled | npm rollback definition |
-| serper | enabled | project Python MCP, key required |
-| arxiv | enabled | project Python MCP |
-| semantic_scholar | enabled | project Python MCP |
+Browser binds to `127.0.0.1:9223`; Scheduler binds to
+`127.0.0.1:9225`. Both require `Authorization: Bearer ...`.
 
-Enabled means configured, not authenticated or reachable.
+## 3. Prompt and Context
 
-The extension tree contains 11 commands, 3 review agents, 2 TypeScript custom
-tool files (10 exports), and 6 repository-owned skills. Ignored upstream skill
-clones and junctions are not portable repository assets.
+The composition order is:
 
-## Python domains
+```text
+Base -> Task -> Context -> Profile -> Example -> Explicit Extra
+```
 
-| Domain | Implemented responsibility | Boundary |
-|---|---|---|
-| `bootstrap` | dependency environment plus TS/Vite config generation/static validation | generation checks do not run npm/lint/tests |
-| `browser` | loopback Playwright/Chromium context and HTTP API | explicit lifecycle; browser process is local |
-| `delivery` | six-category TS/Vite static checklist | heuristic, project-convention specific |
-| `dispatch` | model-role guard | model call optional |
-| `integration_check` | regex-based TS integration checks | not compiler/runtime analysis |
-| `mcp` | fetch, SQLite, and time MCP JSON-RPC servers | SQLite mutation opt-in; fetch uses chunked read with byte limit; time MCP uses `astimezone()` for aware datetimes |
-| `memory` | atomic lessons/ADRs, structural health, task review | explicit calls; private sources remain ignored |
-| `orchestrator` | collection, Chroma index, action extraction, schedule storage | external keys/services still optional at operation time |
-| `prompt` | composition, classification, contexts, experiments | classifier network call optional |
-| `scheduler` | APScheduler HTTP service and atomic job persistence | single SQLite source (`_runtime/mcp-sqlite.db`); legacy `jobs.json` migrated |
-| `search` | privacy/history/scoring/planning/aggregation/MCP helpers | live OpenCode MCP callbacks are procedural |
-| `ui_check` | regex-based UI conventions | not visual/runtime testing |
-| `vision` | image/PDF recognition and clipboard adapter | SiliconFlow key/network required; PDF limits: file size, page count, per-page/total pixels, request batching |
+`modules.prompt.context` detects contexts from real project signals such as file
+paths, extensions, imports, package metadata, and project markers. It writes a
+versioned context-state file containing a project fingerprint.
+`modules.prompt.composer` validates that fingerprint and produces
+`AGENTS_COMPOSED.md` before OpenCode starts.
 
-The current first-party module inventory is 125 files: 108 Python files (53
-source and 55 tests) plus manifests/templates/rule data.
+Task classification has two modes:
 
-## Key flows
+- deterministic heuristic, used as the zero-cost fallback;
+- Model Gateway classification, used when explicitly selected and credentials
+  are available.
 
-### Collection
+## 4. Model Gateway
 
-`run_collection_pipeline` accepts only credential-free HTTP(S) URLs and selects
-backends in this order:
+`modules.dispatch.gateway` is the only first-party owner of DeepSeek transport.
+Business modules do not construct model endpoints.
 
-1. browser-use Agent with BrowserUse, DeepSeek, or Anthropic-compatible LLM;
-2. local Browser daemon navigation, screenshot, Vision, and aggregation;
-3. bounded static HTTP fetch and aggregation.
+Responsibilities:
 
-The report records the successful backend. Degraded successes retain previous
-backend errors. The daemon defaults to a Playwright-managed Chromium build,
-persists cookie/local-storage state only on clean shutdown, binds loopback, and
-enforces request-size, URL, generated-report, and screenshot path boundaries.
+- Pro/Flash routing by task type;
+- explicit model alias validation;
+- message normalization and size limits;
+- known-secret and common-token redaction;
+- bounded metadata telemetry that excludes message bodies;
+- timeout and finite retry policy;
+- structured success/failure response;
+- optional local Run/Step/Event telemetry.
 
-### Search
+`modules.dispatch.compat` is a thin migration adapter that preserves legacy
+`urllib.request.urlopen` test seams while still delegating policy and semantics
+to the Gateway.
 
-`/search` is a provider-aware model procedure. Search modules supply redaction,
-cache/history, ranking, verification, aggregation, and injectable orchestration
-callbacks. The default Python CLI cannot independently call OpenCode MCP tools;
-its dry run is a plan rather than proof of live provider execution.
+`modules.dispatch.no_bypass` scans first-party non-test Python code in CI. The
+Gateway owns transport; the scanner is allow-listed only because it contains the
+endpoint-detection expressions.
 
-The `SearchOrchestrator` pipeline uses a typed contract model with explicit
-`STEP_ORDER`: `validate_request → normalize_query → plan → final_cache_lookup
-→ provider_cache_lookup → provider_execute → normalize_results → deduplicate
-→ rank → aggregate → verify → format → cache_store`. Stream and prewarm are
-external capabilities, not pipeline steps. `aggregate_pre` has been removed;
-no dead steps remain in `STEP_ORDER`. `aggregator_fn` and `cache_store_fn`
-are invoked in-pipeline (not just declared). The `sub_queries` field is the
-canonical name; `subqueries` is a deprecated compatibility read. Dry-run
-reuses `is_step_enabled()` with an explicit `STEP_CONFIG_KEYS` mapping (no
-`enable_{step}` guessing). Verification status appears in `formatted_output`,
-not just side fields. The `VerificationStatus` enum uses seven states
-(`NOT_REQUESTED`/`NOT_RUN`/`WEAK_SUPPORT`/`PARTIALLY_SUPPORTED`/`VERIFIED`/
-`CONTRADICTED`/`ERROR`); keyword overlap is reported as
-`lexical_overlap_score`, never as `VERIFIED`. Parallel execution uses
-`shutdown(wait=False, cancel_futures=True)` and marks unfinished tasks as
-`abandoned`.
+## 5. Search
 
-### Scheduling and Memory
+All production callers use `modules.search.factory.build_search_service`.
 
-Scheduler state has a single authoritative source:
-`_runtime/mcp-sqlite.db` (SQLite). Both the `schedules` table (action items)
-and the `scheduler_jobs` table (cron jobs) live in this same database file.
-The legacy `jobs.json` file is migrated idempotently on daemon startup with a
-timestamped backup; no new writes go to `jobs.json`. Scheduler job types are
-`file_reindex`, `report_collect`, `memory_review`, `action_extract`, and
-exact-whitelist `custom`. The `recurrence` field is rejected at the
-schedule-store layer; recurring jobs must use the scheduler's job model.
-Without APScheduler, creation is refused rather than persisted as a
-false-active job. The HTTP server uses `ThreadingHTTPServer` to prevent
-long-running jobs from blocking status queries.
+```text
+Search request
+   -> validate and normalize
+   -> plan sub-queries
+   -> choose ready providers by mode
+   -> execute with fallback
+   -> normalize and deduplicate
+   -> rank and aggregate
+   -> optional verification
+   -> format truthful result status
+   -> SQLite cache store
+```
 
-Action extraction uses `response_format=json_object` with a strict
-`{"actions": [...]}` schema. `due_at` is validated as ISO 8601 with timezone
-handling. Model selection routes through the Dispatch Guard
-(`resolve_model("action_extraction")`) rather than hardcoding.
+Search modes influence provider policy:
 
-Memory lessons and ADRs are atomic explicit writes. ADR allocation is protected
-across local threads/processes. `review_memory` reads only explicit unchecked
-tasks/TODO lines and writes an ignored report; it never modifies source memory.
+- `quick`: stop after the first sufficient provider result;
+- `standard`: fallback when the primary is unavailable, fails, or is
+  insufficient;
+- `deep`: combine multiple ready providers;
+- `academic`: prefer arXiv and Semantic Scholar;
+- local-only paths remain isolated from outbound providers.
 
-## Storage and privacy
+Provider execution distinguishes:
 
-| Path | Content | Git policy |
-|---|---|---|
-| `markconfig/secrets.json` | real tokens | ignored |
-| `markconfig/profile.md` | personal profile | ignored |
-| `_data/memory/MEMORY.md`, `user-*.md`, lessons/decisions | private local memory | ignored |
-| `_runtime/` | logs, cache, DBs, reports, handoffs, recovery evidence | ignored |
-| `vendor/python-libs/` | reproducible local packages and ABI metadata | ignored |
-| external skill clones/junctions | upstream material | ignored |
+```text
+ready / unconfigured / unavailable / degraded
+success / no_results / failed / skipped
+```
 
-Git exclusion is not encryption. Search redaction is regex-based and cannot
-guarantee removal of every sensitive value.
+A pipeline that runs without exceptions but produces no usable result is not a
+successful Search response.
 
-## Known architectural gaps
+### Search state
 
-- several npm/plugin references remain runtime-resolved rather than locked;
-- SearXNG is a fixed public instance;
-- external skill clone/junction installation is not tracked;
-- Browser and Scheduler lifecycle supervision remains manual;
-- no CI currently runs the documented checks;
-- broad Search provider retry/circuit-breaker behavior is not unified;
-- Memory API unification (M1) and static checker AST layering (C1) are
-  deferred low-severity items — see `_docs/REMEDIATION_MATRIX.md`.
+The authoritative cache is SQLite:
+
+- `search_cache` stores final and provider entries in separate namespaces;
+- `search_cache_migrations` records idempotent legacy imports;
+- `retrieved_at` is immutable freshness evidence;
+- cache reads update only `last_accessed_at`;
+- expired entries are pruned without extending their lifetime.
+
+The old `pipeline_cache.json` and `search_cache.json` files are import-only. The
+historical Search CLI implementation is retained privately for log/history
+compatibility; its default cache path is patched to SQLite.
+
+## 6. Browser and Collection
+
+The Browser daemon owns a Playwright persistent context and project-local
+storage state.
+
+Security and reliability boundaries:
+
+- HTTP API authentication on every route;
+- only absolute HTTP(S) navigation;
+- credentials in URLs rejected;
+- DNS/IP validation blocks loopback, private, link-local, reserved, multicast,
+  and cloud metadata targets;
+- redirects and Playwright subresources are validated;
+- service workers and WebSockets are disabled by default;
+- arbitrary page JavaScript is disabled unless explicitly enabled;
+- request bodies, selectors, scripts, screenshots, and response sizes are
+  bounded.
+
+Collection backend order is:
+
+```text
+explicit unguarded browser-use override (optional)
+        -> authenticated Browser daemon
+        -> secure static Fetch
+```
+
+Normal operation uses the Browser daemon. Collection extracts visible DOM text,
+performs a bounded number of lazy-load scrolls, and adds screenshot/Vision
+recognition only when requested or when DOM content is insufficient.
+
+The optional `browser-use` backend accepts only its upstream Browser Use or
+Anthropic clients. It is disabled by default and never receives a direct
+DeepSeek transport.
+
+## 7. Vision
+
+Vision supports images, clipboard images, and bounded PDF rendering.
+
+Limits include:
+
+- PDF file bytes;
+- maximum PDF pages;
+- per-page pixels;
+- total rendered pixels;
+- encoded request bytes;
+- images per API batch;
+- model response size through the provider boundary.
+
+For multiple API batches, `modules.vision.reducer`:
+
+- sorts page ranges;
+- preserves page-source comments;
+- removes repeated positional headers and footers;
+- keeps the first substantive duplicate paragraph and removes later copies;
+- aggregates headings and tables;
+- reports overlaps, missing pages, failed batches, and truncation as degraded
+  output.
+
+A document with usable recognized sections can be successful and degraded at
+the same time. A single API batch keeps the historical plain-text output format.
+
+## 8. Scheduler
+
+Scheduler domain objects are distinct:
+
+- `ScheduledJob`: trigger and task configuration;
+- `JobRun`: one execution attempt;
+- Action schedules: extracted user-facing actions.
+
+SQLite is authoritative for jobs and runs. Supported triggers are:
+
+- Cron;
+- one-shot Date;
+- fixed Interval.
+
+Timezone precedence is request value, `AGENT_FORGE_USER_TZ`, local system zone,
+then UTC. Persisted execution times are UTC.
+
+An asynchronous manual trigger creates one queued `run_id`. The worker updates
+that same record through running to a terminal state. Date jobs become completed
+or error after their one execution.
+
+## 9. Memory
+
+Memory has two deliberate layers:
+
+### Explicit durable APIs
+
+- atomic lesson append;
+- ADR-style decision append with counter reconciliation;
+- structure-only health checks;
+- read-only open-action reports.
+
+### Candidate approval queue
+
+Candidate content, source, and metadata are normalized and checked before the
+SQLite schema is initialized. Pending candidates can be approved, rejected, or
+expired. Only approval writes durable Markdown under private Memory.
+
+The canonical CLI is `python -m modules.memory.cli`.
+
+Automatic conversation capture remains out of scope.
+
+## 10. Delivery profiles
+
+`python -m modules.delivery` is the canonical static-check entry point.
+
+Profiles:
+
+```text
+generic
+python
+typescript-vite
+threejs
+tower-stack
+```
+
+Generic checks always apply. Specialized checks require explicit project
+evidence or `--profile`. The legacy Delivery checklist and UI Enforcer remain
+available for compatibility but are not universal gates.
+
+## 11. Registry and observability
+
+Each first-party module has a canonical Manifest. Strict Registry validation
+checks parse errors, directory/name consistency, entry points, capabilities,
+storage paths, and duplicate declarations. Invalid manifests remain visible as
+errors instead of disappearing from discovery.
+
+Run/Step/Event provides a shared local envelope for Search, model calls, and
+Scheduler adapters. State reduction distinguishes succeeded, degraded,
+failed, timed out, cancelled, and abandoned runs.
+
+This is operational telemetry, not a remote tracing platform.
+
+## 12. Authoritative state map
+
+| Domain | Authority |
+|---|---|
+| Search result/provider cache | `_runtime/mcp-sqlite.db` |
+| Scheduler jobs and runs | `_runtime/mcp-sqlite.db` |
+| Memory candidates | `_runtime/mcp-sqlite.db` |
+| Durable private Memory | `_data/memory/*.md` |
+| Prompt context state | `_runtime/prompt/` |
+| Runtime service ownership | `_runtime/supervisor/state.json` |
+| Browser cookies/storage | ignored Browser profile directory |
+| Search history and derived quality metrics | `_runtime/search/` |
+| Reports and review artifacts | `_runtime/reports/` |
+
+## 13. Release validation
+
+Windows is the current release platform. A release candidate must pass, for one
+branch head:
+
+1. Python compilation;
+2. strict Registry validation;
+3. Model Gateway no-bypass validation;
+4. fast security/integration contracts;
+5. the complete Windows pytest suite with unhandled thread exceptions treated
+   as errors;
+6. a clean Vendor install from `requirements.lock.txt`;
+7. Chromium installation;
+8. real authenticated Browser and Scheduler Supervisor start/status/stop.
+
+JUnit XML, generated Markdown/JSON test reports, and Supervisor logs are retained
+as GitHub Actions artifacts.
+
+## 14. Pre-2.0 boundary
+
+The foundation now supports reliable single-Agent execution and reusable
+capabilities. It does **not** yet implement the planned Multi-Agent Kernel.
+
+2.0 will add a small Coordinator/Worker/Reviewer model with typed Task,
+Handoff, Artifact, Approval, and checkpoint objects. It will reuse the current
+Gateway, Search, Browser, Scheduler, Memory, Run/Event, and SQLite layers rather
+than replacing them with a second platform.
