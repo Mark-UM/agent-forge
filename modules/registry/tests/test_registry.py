@@ -70,7 +70,7 @@ class TestSchemaValidation:
             },
             "capabilities": [
                 {"name": "test.run", "version": "1.0", "description": "Run tests"},
-                "test.check",  # string form
+                "test.check",
             ],
             "dependencies": {
                 "required": ["requests"],
@@ -78,11 +78,11 @@ class TestSchemaValidation:
             },
             "credentials": [
                 {"env": "API_KEY", "required": True, "description": "API key"},
-                "OPTIONAL_KEY",  # string form
+                "OPTIONAL_KEY",
             ],
             "health_checks": [
                 {"command": "python -c 'import testmod'", "description": "Import check"},
-                "echo ok",  # string form
+                "echo ok",
             ],
             "storage": [
                 {"type": "sqlite", "path": "_runtime/test.db", "tables": ["runs"]},
@@ -176,7 +176,6 @@ class TestSchemaValidation:
         assert d["name"] == "roundtrip"
         assert d["version"] == "1.2.3"
         assert d["entrypoints"]["cli"] == "python -m roundtrip"
-        # Should be JSON serializable
         json.dumps(d)
 
 
@@ -214,7 +213,6 @@ class TestCapabilityRegistry:
         assert removed is not None
         assert removed.name == "alpha"
         assert reg.get("alpha") is None
-        # Unregister non-existent returns None
         assert reg.unregister("nonexistent") is None
 
     def test_all_sorted_by_name(self):
@@ -267,13 +265,13 @@ class TestDiscovery:
     """Tests for module discovery."""
 
     def test_discover_finds_all_modules(self):
-        """Discovery should find all 15 modules with manifests."""
+        """Discovery should find the complete current module inventory."""
         manifests = discover_modules()
         names = {m.name for m in manifests}
         expected = {
             "bootstrap", "browser", "common", "delivery", "dispatch",
             "integration_check", "mcp", "memory", "orchestrator", "prompt",
-            "registry", "scheduler", "search", "ui_check", "vision",
+            "registry", "runtime", "scheduler", "search", "ui_check", "vision",
         }
         assert names == expected, f"Missing: {expected - names}, Extra: {names - expected}"
 
@@ -285,16 +283,14 @@ class TestDiscovery:
     def test_all_manifests_have_required_fields(self):
         """Every discovered manifest must have name and version."""
         for m in discover_modules():
-            assert m.name, f"Manifest missing name"
+            assert m.name, "Manifest missing name"
             assert m.version, f"Manifest {m.name} missing version"
             assert isinstance(m.description, str)
 
     def test_all_manifests_validated(self):
         """Every manifest must pass schema validation."""
-        # discover_modules already validates via validate_manifest.
-        # If discovery returns a manifest, it passed validation.
         manifests = discover_modules()
-        assert len(manifests) >= 15
+        assert len(manifests) >= 16
 
     def test_discovery_returns_sorted(self):
         """Discovery results should be sorted by name."""
@@ -362,14 +358,14 @@ class TestHealthChecks:
         d = status.to_dict()
         assert d["module_name"] == "test"
         assert d["overall"] == "healthy"
-        json.dumps(d)  # Must not raise
+        json.dumps(d)
 
     def test_check_credentials(self):
         """check_credentials should report env var presence."""
         manifest = CapabilityManifest(
             name="test", version="1.0.0", description="",
             credentials=[
-                CredentialRef(env="PATH", required=True),  # Always set
+                CredentialRef(env="PATH", required=True),
                 CredentialRef(env="DEFINITELY_NOT_SET_VAR_XYZ", required=False),
             ],
         )
@@ -396,9 +392,10 @@ class TestRegistrySingleton:
         """get_registry should auto-discover modules on first call."""
         reset_registry()
         r = get_registry()
-        assert len(r) >= 15
+        assert len(r) >= 16
         assert "search" in r
         assert "scheduler" in r
+        assert "runtime" in r
 
     def test_reset_registry(self):
         """reset_registry should clear the singleton."""
@@ -433,7 +430,6 @@ class TestCrossModuleConsistency:
     def test_all_versions_are_semver(self):
         """All manifest versions must be valid semantic versions."""
         for m in discover_modules():
-            # validate_manifest already checks this, but double-check
             assert m.version.count('.') >= 2, f"{m.name}: version {m.version} not semver"
 
     def test_no_duplicate_capability_names_within_module(self):
