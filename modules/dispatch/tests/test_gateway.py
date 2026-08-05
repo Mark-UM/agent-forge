@@ -221,5 +221,9 @@ def test_run_record_is_returned_without_message_content_or_secrets() -> None:
     assert response.run is not None
     serialized = json.dumps(response.run.to_dict())
     assert "secret-deepseek-key" not in serialized
-    assert "implement" not in serialized
+    assert "secret-deepseek-key implement" not in serialized
+    # The non-sensitive routing label is valid telemetry and must not be
+    # confused with the original message body merely because it contains the
+    # same word stem.
+    assert response.run.metadata["task_type"] == "implementation"
     assert response.run.metadata["message_count"] == 1
