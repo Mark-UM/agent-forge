@@ -7,15 +7,17 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def wait_for_owned_scheduler_workers():
+def wait_for_owned_scheduler_workers(request):
     """Keep temporary scheduler databases alive until owned workers finish.
 
-    HTTP handler tests intentionally exercise the asynchronous manual-run path.
-    Without this fixture the test body can finish immediately after receiving
-    ``202 queued`` and pytest tears down the monkeypatched SQLite path while the
-    named worker is still starting. The resulting exception belongs to fixture
-    lifetime, not the scheduler operation, and can leak into a later test.
+    Dynamically requesting ``temp_db`` when the test declares it establishes a
+    fixture dependency: this wait fixture tears down first, while the temporary
+    directory and monkeypatched database path are still valid. Tests without a
+    temp database do not create one unnecessarily.
     """
+
+    if "temp_db" in request.fixturenames:
+        request.getfixturevalue("temp_db")
 
     yield
     deadline = time.monotonic() + 5.0
