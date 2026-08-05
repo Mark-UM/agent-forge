@@ -24,9 +24,9 @@ env:
 
 jobs:
   security-contracts:
-    name: Security and core contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Windows security and core contracts
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -47,9 +47,13 @@ jobs:
       - name: Validate capability manifests strictly
         run: python -m modules.registry validate --strict
 
-      - name: Run security and core regression tests
+      - name: Enforce Model Gateway ownership
+        run: python -m modules.dispatch.no_bypass
+
+      - name: Run Windows security and integration contracts
         run: >-
           python -m pytest -q
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
           modules/common/tests/test_security.py
           modules/common/tests/test_run_reduction_hardening.py
           modules/mcp/tests/test_sqlite_read_only.py
@@ -61,27 +65,39 @@ jobs:
           modules/orchestrator/tests/test_agent_wrapper.py
           modules/orchestrator/tests/test_file_indexer_roots.py
           modules/orchestrator/tests/test_file_indexer.py
+          modules/orchestrator/tests/test_action_extractor.py
           modules/search/tests/test_hardened_service.py
           modules/search/tests/test_contract_phase1.py
           modules/search/tests/test_filter.py
           modules/search/tests/test_orchestrator.py
+          modules/search/tests/test_cache_store.py
+          modules/search/tests/test_planner.py
+          modules/search/tests/test_i18n.py
+          modules/search/tests/test_summarize.py
+          modules/search/tests/test_aggregator.py
+          modules/search/tests/test_quality.py
+          modules/dispatch/tests/test_gateway.py
+          modules/dispatch/tests/test_no_bypass.py
+          modules/dispatch/tests/test_phase2_guard.py
+          modules/vision/tests/test_reducer.py
+          modules/vision/tests/test_recognize_reducer_integration.py
+          modules/memory/tests/test_candidates.py
+          modules/memory/tests/test_cli.py
+          modules/delivery/tests/test_profiles.py
           modules/scheduler/tests/test_trigger_runtime.py
+          modules/scheduler/tests/test_r2_scheduler.py
           modules/runtime/tests/test_supervisor.py
+          modules/registry/tests/test_registry.py
           modules/registry/tests/test_strict_discovery.py
+          modules/prompt/tests/test_classify.py
           modules/prompt/tests/test_context_composition.py
           modules/prompt/tests/test_context.py
 
   full-test-suite:
-    name: Full suite (${{ matrix.os }})
+    name: Full suite (windows-latest)
     needs: security-contracts
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
+    runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -102,5 +118,20 @@ jobs:
       - name: Validate capability manifests strictly
         run: python -m modules.registry validate --strict
 
-      - name: Run complete pytest suite
-        run: python -m pytest -q
+      - name: Enforce Model Gateway ownership
+        run: python -m modules.dispatch.no_bypass
+
+      - name: Run complete Windows pytest suite
+        run: >-
+          python -m pytest -q
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
+          --junitxml=_runtime/test-results/windows-pytest.xml
+
+      - name: Upload Windows test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pytest-results
+          path: _runtime/test-results/windows-pytest.xml
+          if-no-files-found: warn
+          retention-days: 14
