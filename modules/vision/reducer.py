@@ -9,7 +9,7 @@ degraded output instead of pretending the document is complete.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import re
 from typing import Any, Iterable, Mapping, Optional
 
@@ -129,12 +129,23 @@ def _normalise_text(text: str) -> str:
 
 def _candidate_edge_lines(text: str) -> tuple[Optional[str], Optional[str]]:
     lines = [_clean_line(line) for line in text.splitlines() if _clean_line(line)]
-    if not lines:
+    # A one-line recognition result is substantive content, not simultaneously
+    # a header and footer. Treating it as both made two separate batches look
+    # like repeated chrome and erased the entire document.
+    if len(lines) < 2:
         return None, None
     return lines[0], lines[-1]
 
 
-def _repeated_edges(texts: Iterable[str]) -> set[str]:
+def _repeated_edges(texts: Iterable[str]) -> tuple[set[str], set[str]]:
+    """Return independently repeated first and last lines.
+
+    First and last positions must never share one Counter. A substantive
+    paragraph at the end of one batch and the start of the next is a boundary
+    duplicate; it should be retained once by paragraph de-duplication, not
+    classified as both a repeated header and footer and removed twice.
+    """
+
     firsts: Counter[str] = Counter()
     lasts: Counter[str] = Counter()
     count = 0
@@ -146,24 +157,30 @@ def _repeated_edges(texts: Iterable[str]) -> set[str]:
         if last and 3 <= len(last) <= 200:
             lasts[last] += 1
     if count < 2:
-        return set()
+        return set(), set()
     threshold = max(2, (count + 1) // 2)
-    return {
-        line
-        for line, occurrences in (firsts + lasts).items()
-        if occurrences >= threshold
+    repeated_firsts = {
+        line for line, occurrences in firsts.items() if occurrences >= threshold
     }
+    repeated_lasts = {
+        line for line, occurrences in lasts.items() if occurrences >= threshold
+    }
+    return repeated_firsts, repeated_lasts
 
 
-def _remove_edges(text: str, repeated: set[str]) -> str:
+def _remove_edges(
+    text: str,
+    repeated_firsts: set[str],
+    repeated_lasts: set[str],
+) -> str:
     lines = text.splitlines()
     while lines and not _clean_line(lines[0]):
         lines.pop(0)
     while lines and not _clean_line(lines[-1]):
         lines.pop()
-    if lines and _clean_line(lines[0]) in repeated:
+    if lines and _clean_line(lines[0]) in repeated_firsts:
         lines.pop(0)
-    if lines and _clean_line(lines[-1]) in repeated:
+    if lines and _clean_line(lines[-1]) in repeated_lasts:
         lines.pop()
     return _normalise_text("\n".join(lines)) if lines else ""
 
@@ -182,7 +199,7 @@ def _dedupe_paragraphs(text: str, seen: set[str]) -> str:
             continue
         key = _paragraph_key(paragraph)
         # Very short labels/headings may legitimately recur; de-duplicate only
-        # substantive paragraphs.
+        # substantive paragraphs. The first occurrence is always retained.
         if len(key) >= 40 and key in seen:
             continue
         if len(key) >= 40:
@@ -278,7 +295,7 @@ def reduce_batches(
     normalized.sort(key=lambda item: (item.page_start, item.page_end))
 
     successful = [batch for batch in normalized if batch.success]
-    repeated = _repeated_edges(
+    repeated_firsts, repeated_lasts = _repeated_edges(
         _normalise_text(batch.text) for batch in successful if batch.text.strip()
     )
     seen_paragraphs: set[str] = set()
@@ -301,7 +318,9 @@ def reduce_batches(
                 f"{batch.error or 'unknown error'}"
             )
             continue
-        cleaned = _remove_edges(_normalise_text(batch.text), repeated)
+        cleaned = _remove_edges(
+            _normalise_text(batch.text), repeated_firsts, repeated_lasts
+        )
         cleaned = _dedupe_paragraphs(cleaned, seen_paragraphs)
         if cleaned:
             sections.append(
@@ -346,9 +365,7 @@ def reduce_batches(
             f"reduced document truncated to {MAX_DOCUMENT_TEXT_CHARS} characters"
         )
 
-    ranges = tuple(
-        (batch.page_start, batch.page_end) for batch in successful
-    )
+    ranges = tuple((batch.page_start, batch.page_end) for batch in successful)
     failed_count = len(normalized) - len(successful)
     degraded = bool(
         failed_count
