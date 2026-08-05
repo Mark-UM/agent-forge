@@ -1,6 +1,7 @@
 """Behavioral tests for the local dependency environment manager."""
 
 import os
+import site
 import sys
 from pathlib import Path
 
@@ -17,6 +18,18 @@ def test_activate_vendor_path_is_idempotent(tmp_path, monkeypatch):
     assert dependencies.activate_vendor_path() is True
     assert sys.path.count(str(vendor)) == 1
     assert sys.path[0] == str(vendor)
+
+
+def test_activate_vendor_path_processes_vendor_pth_files(tmp_path, monkeypatch):
+    vendor = tmp_path / "vendor" / "python-libs"
+    vendor.mkdir(parents=True)
+    processed = []
+    monkeypatch.setattr(dependencies, "VENDOR_LIBS", vendor)
+    monkeypatch.setattr(site, "addsitedir", lambda path: processed.append(path))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+
+    assert dependencies.activate_vendor_path() is True
+    assert processed == [str(vendor)]
 
 
 def test_activate_vendor_path_sets_project_local_browser_use_config(monkeypatch):

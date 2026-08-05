@@ -12,6 +12,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import site
 import subprocess
 import sys
 from typing import Mapping
@@ -54,6 +55,10 @@ def activate_vendor_path() -> bool:
     while value in sys.path:
         sys.path.remove(value)
     sys.path.insert(0, value)
+    # ``pip --target`` leaves .pth processing to the caller.  Treat the
+    # ignored vendor directory as a real site directory so packages such as
+    # pywin32 can register their bundled import and DLL search paths.
+    site.addsitedir(value)
     return True
 
 
