@@ -376,6 +376,15 @@ class TaskRepository:
             row = connection.execute("SELECT * FROM kernel_tasks WHERE task_id=?", (task_id,)).fetchone()
             return self._row_to_task(row) if row else None
 
+    @staticmethod
+    def _resolve_run_id(current: Task, run_id: str | None) -> str | None:
+        if run_id is None:
+            return current.run_id
+        candidate = replace(current, run_id=run_id).run_id
+        if current.run_id is not None and current.run_id != candidate:
+            raise ConcurrencyConflictError("task is already correlated to another run")
+        return candidate
+
     def transition_task(
         self,
         task_id: str,
@@ -389,6 +398,7 @@ class TaskRepository:
         approval_ids: tuple[str, ...] | None = None,
         failure: FailureInfo | None = None,
         degraded: DegradedInfo | None = None,
+        run_id: str | None = None,
         checkpoint_payload: Mapping[str, Any] | None = None,
         checkpoint_id: str | None = None,
         claim_token: str | None = None,
@@ -415,11 +425,13 @@ class TaskRepository:
                     TaskStatus.WAITING_APPROVAL, TaskStatus.HANDOFF_PENDING, TaskStatus.REVIEWING,
                 }
                 next_task = replace(
-                    current, status=target_status, owner_agent_id=owner_agent_id or current.owner_agent_id,
+                    current, status=target_status,
+                    owner_agent_id=owner_agent_id or current.owner_agent_id,
                     current_step=current_step if current_step is not None else current.current_step,
                     budget_used=budget_used or current.budget_used,
                     artifact_ids=artifact_ids if artifact_ids is not None else current.artifact_ids,
                     approval_ids=approval_ids if approval_ids is not None else current.approval_ids,
+                    run_id=self._resolve_run_id(current, run_id),
                     failure=failure, degraded=degraded, updated_at=now,
                     started_at=current.started_at or (now if target_status is TaskStatus.RUNNING else None),
                     finished_at=now if target_status in TASK_TERMINAL else None,
@@ -445,9 +457,12 @@ class TaskRepository:
         claimant: str,
         expected_version: int,
         lease_seconds: int = 300,
+        run_id: str | None = None,
         now: datetime | None = None,
     ) -> tuple[Task, TaskCheckpoint]:
-        if isinstance(lease_seconds, bool) or not 1 <= lease_seconds <= 86_400:
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int):
+            raise ValueError("lease_seconds must be an integer")
+        if not 1 <= lease_seconds <= 86_400:
             raise ValueError("lease_seconds must be between 1 and 86400")
         self.initialize()
         claimed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -467,15 +482,21 @@ class TaskRepository:
                 except InvalidTransitionError as exc:
                     raise ClaimConflictError(f"task is not claimable from {current.status.value}") from exc
                 now_iso = claimed_at.isoformat()
+                correlated_run_id = self._resolve_run_id(current, run_id)
                 next_task = replace(
                     current, status=TaskStatus.RUNNING, owner_agent_id=claimant,
+                    run_id=correlated_run_id,
                     started_at=current.started_at or now_iso, updated_at=now_iso,
                     record_version=current.record_version + 1, claim_owner=claimant,
                     claim_token=new_id("claim"),
                     claim_expires_at=(claimed_at + timedelta(seconds=lease_seconds)).isoformat(),
                 )
                 self._update_task(connection, next_task, expected_version)
-                checkpoint = self._insert_checkpoint(connection, next_task, payload={"event": "claimed"})
+                checkpoint = self._insert_checkpoint(
+                    connection,
+                    next_task,
+                    payload={"event": "claimed", "run_id": correlated_run_id},
+                )
                 connection.commit()
                 return next_task, checkpoint
             except Exception:
@@ -491,7 +512,9 @@ class TaskRepository:
         lease_seconds: int = 300,
         now: datetime | None = None,
     ) -> tuple[Task, TaskCheckpoint]:
-        if isinstance(lease_seconds, bool) or not 1 <= lease_seconds <= 86_400:
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int):
+            raise ValueError("lease_seconds must be an integer")
+        if not 1 <= lease_seconds <= 86_400:
             raise ValueError("lease_seconds must be between 1 and 86400")
         self.initialize()
         renewed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
