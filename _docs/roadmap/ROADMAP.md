@@ -31,15 +31,32 @@ Evidence:
 - PR #1 merged;
 - main push workflows passed.
 
-The pre-2.0 foundation is closed. The 2.0 Lightweight Multi-Agent Kernel is the
-next active milestone; its planned contents are not implemented yet. Live
-credentials and private data remain local-only acceptance and are not shared CI
-inputs. Destructive backup and restore drills remain later Roadmap work rather
-than a 2.0 prerequisite.
+The pre-2.0 foundation is closed. Planning for the 2.0 Lightweight Multi-Agent
+Kernel is active; implementation has not started. Live credentials and private
+data remain local-only acceptance and are not shared CI inputs. Destructive
+backup and restore drills remain later Roadmap work rather than a 2.0
+prerequisite.
 
 ## 2.0 — Lightweight Multi-Agent Kernel
 
-Status: next active milestone; not implemented.
+Status: planning active; implementation not started.
+
+Planning package:
+
+- [`2.0_EXECUTION_PLAN.md`](2.0_EXECUTION_PLAN.md) — delivery slices,
+  architecture principles, compatibility, security, observability, and
+  Definition of Done;
+- [`2.0_CONTRACTS_AND_STATE.md`](2.0_CONTRACTS_AND_STATE.md) — conceptual typed
+  contracts, state machines, SQLite authority, idempotency, and failure
+  semantics;
+- [`2.0_FRAMEWORK_POC.md`](2.0_FRAMEWORK_POC.md) — equivalent OpenAI Agents SDK
+  and PydanticAI PoC plan and formal decision gates;
+- [`2.0_ACCEPTANCE_MATRIX.md`](2.0_ACCEPTANCE_MATRIX.md) — traceable test,
+  failure-injection, Windows, and release evidence requirements.
+
+These documents define planned work and decision gates. They do not advertise
+Kernel behavior as implemented, select a framework, add dependencies, or create
+a database schema.
 
 Goal: move from one coding Agent plus review procedures to a small, typed Agent
 kernel without introducing a second platform.
@@ -68,6 +85,9 @@ Non-goals:
 - distributed queues;
 - autonomous modification of `main`;
 - ten or more permanent Agent roles.
+
+SiliconFlow Vision local acceptance remains a separate non-blocking Provider
+issue. The first 2.0 text end-to-end Task must not depend on Vision.
 
 ## 2.1 — Durable execution
 

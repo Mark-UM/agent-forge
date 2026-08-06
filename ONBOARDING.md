@@ -1,7 +1,20 @@
-# AgentForge Onboarding
+# Agent Forge Onboarding
 
 Use this file as the maintainer entry point. Establish current behavior from
-code/configuration before consulting archived plans.
+code, configuration, and current manifests before consulting plans. When prose
+conflicts with executable behavior, code and configuration are authoritative and
+the maintained prose must be corrected.
+
+## Current status
+
+- The pre-2.0 Windows-first foundation is complete.
+- 2.0 Lightweight Multi-Agent Kernel planning is active.
+- 2.0 implementation has not started.
+- The working single-Agent, CLI, MCP, and OpenCode paths remain the current
+  product behavior.
+
+See `_docs/roadmap/ROADMAP.md` and its linked 2.0 planning documents. Planning
+content describes proposed contracts and gates, not implemented capability.
 
 ## Reading order
 
@@ -9,65 +22,76 @@ code/configuration before consulting archived plans.
 2. generated `AGENTS_COMPOSED.md`, when the launcher has created it;
 3. ignored `markconfig/profile.md`, when present;
 4. `README.md` and `_docs/ARCHITECTURE.md`;
-5. the task/context Prompt relevant to the change.
+5. `_docs/DEVELOPER.md` and `_docs/USER_GUIDE.md`;
+6. the active Roadmap and task-specific Prompt context.
 
-`_docs/history/` and `_docs/roadmap/archive/` are never current specifications.
+`_docs/history/` and `_docs/roadmap/archive/` are design history, not current
+specifications.
 
-## Invariants
+## Maintainer invariants
 
-- Never commit real secrets, profiles, private memory, runtime state, databases,
+- Never commit real secrets, profiles, private Memory, runtime state, databases,
   logs, external skill junctions/clones, caches, or vendored dependencies.
-- Image/PDF recognition uses the custom Vision path required by project policy.
-- Review Subagents are read-only and the three stages run sequentially when the
-  workflow requires review.
-- Slash Commands are Markdown procedures unless an individual command explicitly
-  invokes a Python CLI.
-- Runtime writes go under `_runtime/`; maintained public documentation goes
-  under `_docs/`.
-- Runtime dependencies must be declared in `requirements.txt`, resolved in
-  `requirements.lock.txt`, and installed through the local dependency manager;
-  test-only dependencies belong in `requirements-dev.txt`.
-- When prose conflicts with code/config, correct the maintained prose and record
-  the gap rather than preserving an unsupported claim.
+- Runtime writes stay under `_runtime/`; maintained public documentation stays
+  under `_docs/` unless an existing top-level document is canonical.
+- Model requests use `modules.dispatch.gateway`; first-party business modules do
+  not own model endpoints.
+- Search callers use `modules.search.factory.build_search_service`.
+- Browser and Scheduler lifecycle is managed by
+  `modules.runtime.supervisor` during normal operation.
+- One state domain has one authority. Compatibility and migration paths must not
+  become permanent dual-write paths.
+- Optional capability failure is reported as unavailable or degraded, never as
+  fabricated success.
+- New dependencies must be justified, locked, and validated on Windows with
+  Python 3.11 before production adoption.
 
 ## Component map
 
-| Path | Responsibility |
+| Path | Current responsibility and canonical entry |
 |---|---|
-| `opencode.json` | model/plugin/MCP configuration and project permissions |
-| `start-opencode.bat` | Python/dependency gate, local secret export, Prompt composition, OpenCode launch |
-| `.opencode/prompts/` | base/profile/task/context/example Prompt layers |
-| `.opencode/commands/` | 11 agent-interpreted procedures |
-| `.opencode/agents/` | 3 read-only review definitions |
-| `.opencode/tools/` | Vision tool plus Browser HTTP clients |
-| `.opencode/skills/` | 6 owned skills and optional ignored external junctions |
-| `modules/search/` | Search v4.4 libraries and three configured MCP servers |
-| `modules/mcp/` | local fetch/SQLite/time MCP servers |
-| `modules/browser/`, `modules/vision/` | Browser daemon and Vision adapters |
-| `modules/prompt/`, `modules/dispatch/` | Prompt composition and model-role policy |
-| `modules/orchestrator/`, `modules/scheduler/` | local automation helpers/daemon |
-| `modules/memory/` | explicit atomic append, health, and read-only review; no automatic capture |
-| `modules/bootstrap/` | dependency manager plus nine-file TypeScript/Vite scaffold generator |
-| `modules/integration_check/`, `modules/ui_check/`, `modules/delivery/` | opinionated static checks |
+| `start-opencode.bat` | Python/Vendor gate, ignored local configuration, Prompt composition, Runtime Supervisor, OpenCode launch |
+| `opencode.json` | OpenCode model, plugin, MCP, and project permission configuration |
+| `.opencode/prompts/` | tracked Prompt layers used by `modules.prompt.composer` |
+| `.opencode/commands/`, `.opencode/agents/`, `.opencode/skills/`, `.opencode/tools/` | OpenCode procedures, read-only review roles, skills, and tool wrappers |
+| `modules.dispatch/` | Model Gateway, compatibility adapter, and no-bypass validation |
+| `modules.common/` | shared security helpers and Run/Step/Event telemetry contracts |
+| `modules.search/` | Search **v4.6.0**; canonical production factory, Provider fallback, and SQLite cache contracts |
+| `modules.runtime/` | unified Browser/Scheduler start, status, bounded restart, stop, adoption, and cleanup |
+| `modules.browser/`, `modules.vision/` | authenticated Browser daemon and bounded image/PDF recognition |
+| `modules.mcp/` | secure Fetch, SQLite, and Time MCP servers |
+| `modules.scheduler/`, `modules.memory/` | authenticated scheduling and approval-gated private Memory |
+| `modules.registry/` | strict Manifest and capability validation |
+| `modules.orchestrator/` | current collection, action extraction, indexing, and scheduling adapters; not the planned 2.0 Kernel |
+| `modules.delivery/`, `modules.integration_check/`, `modules.ui_check/` | profile-aware and compatibility static checks |
+| `modules.bootstrap/` | dependency, ABI, Browser installation, and scaffold support |
 
-## Main flows
+## Current flows
 
-- Startup: launcher resolves its repository, requires Python 3.11 and healthy
-  local imports, reads four selected secrets, composes `AGENTS_COMPOSED.md`,
-  then starts OpenCode.
-- Search: `/search` selects currently enabled MCP providers and may call Python
-  helpers. The standalone orchestrator needs injected callbacks.
-- Browser: `/browser` starts the localhost daemon; tools only send HTTP calls.
-- Collection: browser-use Agent is primary when an LLM key is available,
-  followed by Browser/Vision and static-fetch fallbacks with error provenance.
-- Delivery: static Python checks and the three review Subagents are separate
-  mechanisms coordinated by `/deliver`.
+- **Startup:** `start-opencode.bat` validates Python 3.11 and Vendor state,
+  loads ignored local configuration without printing secrets, composes
+  `AGENTS_COMPOSED.md`, and runs OpenCode through the Runtime Supervisor.
+- **Search:** MCP, CLI, and library callers share
+  `modules.search.factory.build_search_service`; readiness and fallback are
+  explicit, and empty usable output is not reported as success.
+- **Browser:** the authenticated Browser daemon is started and observed through
+  the Runtime Supervisor. Tools do not own an independent lifecycle.
+- **Collection:** normal order is authenticated Browser daemon, then secure
+  static Fetch. `browser-use` is disabled by default and is available only as an
+  explicit reduced-security override.
+- **Delivery:** profile-aware static checks and read-only review Agents are
+  separate mechanisms coordinated by maintained procedures.
 
-## Known gaps
+## Known gaps and active planning
 
-- production `/search` callback wiring;
-- tracked external-skill installer and reproducible plugin/MCP version pinning;
-- unified Browser/Scheduler lifecycle supervision and external retry budgets;
-- CI and automated documentation/config consistency checks.
-
-The active roadmap tracks these items without version promises.
+- The 2.0 typed Task/Handoff/Artifact/Approval Kernel is planned but not
+  implemented.
+- Framework selection remains open until equivalent OpenAI Agents SDK and
+  PydanticAI PoCs are measured through the existing Model Gateway boundary.
+- Reproducible pinning for external plugins, MCP packages, and optional skills
+  remains incomplete.
+- SiliconFlow `Qwen/Qwen3-VL-Plus` local acceptance currently fails with a
+  `RuntimeError`; the cause is unverified and the issue does not block the first
+  text-only 2.0 loop.
+- GitHub `main` technical protection is a governance concern until protection
+  and required checks are verified as enabled.
