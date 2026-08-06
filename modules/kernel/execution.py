@@ -6,6 +6,8 @@ a later Handoff concern.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from modules.common.run import RunRecorder
 
 from ._engine_base import ExecutionOutcome, _ExecutionEngineBase
@@ -13,7 +15,6 @@ from .agents import AgentCommand, AgentResult, CancellationToken
 from .contracts import BudgetUsage, FailureCategory, KernelContractError, TaskStatus, new_id
 from .coordinator import CoordinatorPlan
 from .execution_support import (
-    AgentResultStatus,
     BudgetExceededError,
     DuplicateExecutionError,
     ExecutionError,
@@ -46,6 +47,8 @@ class KernelExecutionEngine(_ExecutionEngineBase):
         cancellation: CancellationToken | None = None,
         run_id: str | None = None,
     ) -> ExecutionOutcome:
+        if type(prefer_direct) is not bool:
+            raise KernelContractError("prefer_direct must be boolean")
         task = self.repository.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(f"Task not found: {task_id}")
@@ -55,8 +58,12 @@ class KernelExecutionEngine(_ExecutionEngineBase):
             )
 
         token = cancellation or CancellationToken()
+        if not isinstance(token, CancellationToken):
+            raise KernelContractError("cancellation must be CancellationToken")
         request = permission_request or PermissionRequest()
-        correlation_id = _identifier(run_id or task.run_id or f"run_{task.task_id}", "run_id")
+        if not isinstance(request, PermissionRequest):
+            raise KernelContractError("permission_request must be PermissionRequest")
+        correlation_id = _identifier(run_id or task.run_id or new_id("run"), "run_id")
         if token.cancelled:
             return self._cancel_queued_task(
                 task, token=token, correlation_id=correlation_id
@@ -66,7 +73,8 @@ class KernelExecutionEngine(_ExecutionEngineBase):
                 task.task_id,
                 claimant=self.coordinator.coordinator.agent_id,
                 expected_version=task.record_version,
-                lease_seconds=self.lease_seconds,
+                lease_seconds=self._claim_lease_seconds(task),
+                run_id=correlation_id,
             )
         except (ClaimConflictError, ConcurrencyConflictError) as exc:
             raise DuplicateExecutionError(
@@ -127,60 +135,78 @@ class KernelExecutionEngine(_ExecutionEngineBase):
                 last_step = "agent.execute"
                 with recorder.step("agent.execute") as step:
                     selected = self._specs[plan.selected_agent_id]
-                    structural = BudgetUsage(
-                        steps=1,
+                    execution_step = BudgetUsage(steps=1)
+                    invocation = BudgetUsage(
                         tool_calls=1 if tool_name else 0,
                         agent_count=0 if plan.mode is ExecutionMode.DIRECT else 1,
                     )
-                    if not _within_after(usage, structural, claimed.budget):
+                    if not _within_after(usage, execution_step, claimed.budget):
                         agent_result = AgentResult.failed(
-                            "Task budget cannot start selected Agent operation",
+                            "Task budget cannot start selected Agent step",
                             category=FailureCategory.BUDGET_EXHAUSTION,
                             code="budget_exhausted",
                         )
                         self._mark_step(step, agent_result, agent_result.checkpoint_summary())
-                    elif token.cancelled:
-                        usage = _add_usage(usage, structural)
-                        agent_result = AgentResult.cancelled(token.reason)
-                        self._mark_step(step, agent_result, agent_result.checkpoint_summary())
                     else:
-                        command = AgentCommand(
-                            command_id=new_id("command"),
-                            task_id=claimed.task_id,
-                            agent_id=selected.agent_id,
-                            objective=claimed.objective,
-                            normalized_input=claimed.normalized_input,
-                            required_capabilities=claimed.required_capabilities,
-                            remaining_budget=_remaining(
-                                claimed.budget, _add_usage(usage, structural)
-                            ),
-                            permission_request=request,
-                            tool_name=tool_name,
-                        )
-                        runtime = self.runtimes[selected.agent_id]
-                        try:
-                            with self._agent_slot(selected):
-                                runtime_result = runtime.execute(command, token)
-                            if not isinstance(runtime_result, AgentResult):
-                                raise TypeError("AgentRuntime must return AgentResult")
-                            self.coordinator.validate_output(selected, runtime_result)
-                            attempted_usage = _add_usage(usage, structural, runtime_result.usage)
-                            if not attempted_usage.within(claimed.budget):
-                                raise BudgetExceededError(
-                                    "Agent usage exceeded the remaining Task budget"
-                                )
-                            usage = attempted_usage
-                            agent_result = runtime_result
-                        except BudgetExceededError as exc:
-                            usage = _add_usage(usage, structural)
-                            agent_result = self._failure_result(exc)
-                        except KernelContractError as exc:
-                            usage = _add_usage(usage, structural)
-                            agent_result = self._failure_result(exc)
-                        except BaseException as exc:
-                            usage = _add_usage(usage, structural)
-                            agent_result = self._safe_runtime_failure(exc)
-                        self._mark_step(step, agent_result, agent_result.checkpoint_summary())
+                        usage = _add_usage(usage, execution_step)
+                        if token.cancelled:
+                            agent_result = AgentResult.cancelled(token.reason)
+                            self._mark_step(step, agent_result, agent_result.checkpoint_summary())
+                        elif not _within_after(usage, invocation, claimed.budget):
+                            agent_result = AgentResult.failed(
+                                "Task budget cannot invoke the selected Agent operation",
+                                category=FailureCategory.BUDGET_EXHAUSTION,
+                                code="budget_exhausted",
+                            )
+                            self._mark_step(step, agent_result, agent_result.checkpoint_summary())
+                        else:
+                            command = AgentCommand(
+                                command_id=new_id("command"),
+                                task_id=claimed.task_id,
+                                agent_id=selected.agent_id,
+                                objective=claimed.objective,
+                                normalized_input=claimed.normalized_input,
+                                required_capabilities=claimed.required_capabilities,
+                                remaining_budget=_remaining(
+                                    claimed.budget, _add_usage(usage, invocation)
+                                ),
+                                permission_request=request,
+                                tool_name=tool_name,
+                            )
+                            runtime = self.runtimes[selected.agent_id]
+                            usage = _add_usage(usage, invocation)
+                            try:
+                                with self._agent_slot(selected):
+                                    runtime_result = runtime.execute(command, token)
+                                if not isinstance(runtime_result, AgentResult):
+                                    raise TypeError("AgentRuntime must return AgentResult")
+                                attempted_usage = _add_usage(usage, runtime_result.usage)
+                                if not attempted_usage.within(claimed.budget):
+                                    usage, agent_result = self._runtime_budget_failure(
+                                        current=usage,
+                                        reported=runtime_result.usage,
+                                        limit=claimed.budget,
+                                    )
+                                else:
+                                    usage = attempted_usage
+                                    try:
+                                        self.coordinator.validate_output(selected, runtime_result)
+                                    except KernelContractError as exc:
+                                        agent_result = AgentResult.failed(
+                                            str(exc),
+                                            category=FailureCategory.VALIDATION,
+                                            code="contract_invalid",
+                                            usage=runtime_result.usage,
+                                        )
+                                    else:
+                                        agent_result = runtime_result
+                            except BudgetExceededError as exc:
+                                agent_result = self._failure_result(exc)
+                            except KernelContractError as exc:
+                                agent_result = self._failure_result(exc)
+                            except Exception as exc:
+                                agent_result = self._safe_runtime_failure(exc)
+                            self._mark_step(step, agent_result, agent_result.checkpoint_summary())
 
         assert agent_result is not None
         terminal = self._task_status(agent_result)
@@ -201,6 +227,7 @@ class KernelExecutionEngine(_ExecutionEngineBase):
             claimed.task_id,
             terminal,
             expected_version=claimed.record_version,
+            run_id=correlation_id,
             owner_agent_id=self.coordinator.coordinator.agent_id,
             current_step=last_step,
             budget_used=usage,

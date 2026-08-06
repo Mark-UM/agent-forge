@@ -11,6 +11,8 @@ from modules.common.run import EventLevel, EventType, RunRecorder, RunResult, Ru
 from .agents import AgentResult, AgentRuntime, CancellationToken
 from .contracts import (
     AgentSpec,
+    BudgetLimit,
+    BudgetUsage,
     FailureCategory,
     FailureInfo,
     KernelContractError,
@@ -24,9 +26,11 @@ from .execution_support import (
     BudgetExceededError,
     ExecutionCancelled,
     PermissionDeniedError,
+    _add_usage,
     _usage_dict,
 )
 from .repository import TaskRepository
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutionOutcome:
@@ -51,7 +55,13 @@ class _ExecutionEngineBase:
         *,
         lease_seconds: int = 300,
     ) -> None:
-        if isinstance(lease_seconds, bool) or not 1 <= lease_seconds <= 86_400:
+        if not isinstance(repository, TaskRepository):
+            raise TypeError("repository must be TaskRepository")
+        if not isinstance(coordinator, DeterministicCoordinator):
+            raise TypeError("coordinator must be DeterministicCoordinator")
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int):
+            raise ValueError("lease_seconds must be an integer")
+        if not 1 <= lease_seconds <= 86_400:
             raise ValueError("lease_seconds must be between 1 and 86400")
         self.repository = repository
         self.coordinator = coordinator
@@ -61,6 +71,13 @@ class _ExecutionEngineBase:
         self._active_lock = Lock()
         specs = (coordinator.coordinator, *coordinator.workers)
         self._specs = {spec.agent_id: spec for spec in specs}
+        unknown_runtime_ids = sorted(set(self.runtimes) - set(self._specs))
+        if unknown_runtime_ids:
+            raise KernelContractError(
+                "runtimes contain undeclared Agent IDs: " + ", ".join(unknown_runtime_ids)
+            )
+        if any(not hasattr(runtime, "execute") for runtime in self.runtimes.values()):
+            raise KernelContractError("each Agent runtime must expose execute()")
 
     @contextmanager
     def _agent_slot(self, spec: AgentSpec) -> Iterator[None]:
@@ -80,7 +97,7 @@ class _ExecutionEngineBase:
                     self._active_by_agent[spec.agent_id] = remaining
 
     @staticmethod
-    def _safe_runtime_failure(exc: BaseException) -> AgentResult:
+    def _safe_runtime_failure(exc: Exception) -> AgentResult:
         if isinstance(exc, ExecutionCancelled):
             return AgentResult.cancelled("execution cancelled by cooperative token")
         if isinstance(exc, TimeoutError):
@@ -100,7 +117,7 @@ class _ExecutionEngineBase:
         )
 
     @staticmethod
-    def _failure_result(exc: BaseException) -> AgentResult:
+    def _failure_result(exc: Exception) -> AgentResult:
         if isinstance(exc, PermissionDeniedError):
             return AgentResult.failed(
                 str(exc),
@@ -182,7 +199,69 @@ class _ExecutionEngineBase:
                 level=EventLevel.WARN,
                 payload={"custom_type": "kernel.task.cancelled"},
             )
+        elif task_status is TaskStatus.FAILED:
+            for event in reversed(recorder.run.events):
+                if event.type == EventType.RUN_FAILED:
+                    event.payload = {"error": recorder.run.error or ""}
+                    break
         return RunResult.from_run(recorder.run)
+
+    def _claim_lease_seconds(self, task: Task) -> int:
+        """Cover the remaining bounded Task duration plus reconciliation grace."""
+        remaining = max(
+            0,
+            task.budget.wall_clock_seconds - task.budget_used.wall_clock_seconds,
+        )
+        grace = max(30, min(self.lease_seconds, 300))
+        required = max(self.lease_seconds, remaining + grace)
+        if required > 86_400:
+            raise BudgetExceededError(
+                "remaining Task wall-clock budget exceeds maximum claim lease"
+            )
+        return required
+
+    @staticmethod
+    def _bounded_usage(value: BudgetUsage, limit: BudgetLimit) -> BudgetUsage:
+        return BudgetUsage(
+            **{
+                name: min(getattr(value, name), getattr(limit, name))
+                for name in BudgetUsage.__dataclass_fields__
+            }
+        )
+
+    @staticmethod
+    def _runtime_budget_failure(
+        *,
+        current: BudgetUsage,
+        reported: BudgetUsage,
+        limit: BudgetLimit,
+    ) -> tuple[BudgetUsage, AgentResult]:
+        attempted = _add_usage(current, reported)
+        exceeded = [
+            name
+            for name in BudgetUsage.__dataclass_fields__
+            if getattr(attempted, name) > getattr(limit, name)
+        ]
+        details = {
+            "exceeded_dimensions": exceeded,
+            "reported_usage": _usage_dict(reported),
+            "attempted_usage": _usage_dict(attempted),
+            "budget_limit": _usage_dict(limit),
+        }
+        bounded = _ExecutionEngineBase._bounded_usage(attempted, limit)
+        if "wall_clock_seconds" in exceeded:
+            return bounded, AgentResult.timed_out(
+                "Agent usage exceeded the Task wall-clock budget",
+                usage=reported,
+                details=details,
+            )
+        return bounded, AgentResult.failed(
+            "Agent usage exceeded the remaining Task budget",
+            category=FailureCategory.BUDGET_EXHAUSTION,
+            code="budget_exhausted",
+            usage=reported,
+            details=details,
+        )
 
     def _cancel_queued_task(
         self,
@@ -212,6 +291,7 @@ class _ExecutionEngineBase:
             task.task_id,
             TaskStatus.CANCELLED,
             expected_version=task.record_version,
+            run_id=correlation_id,
             current_step="coordinator.plan",
             budget_used=task.budget_used,
             failure=result.failure,
@@ -228,4 +308,3 @@ class _ExecutionEngineBase:
         return ExecutionOutcome(
             task=final_task, run=run_result, plan=None, agent_result=result
         )
-

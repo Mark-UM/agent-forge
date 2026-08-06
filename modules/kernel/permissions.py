@@ -8,6 +8,24 @@ from typing import Any
 from .contracts import AgentSpec, KernelContractError
 from .execution_support import PermissionDeniedError, _identifier
 
+
+def _project_relative_path(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise KernelContractError(f"{field_name} must be a string")
+    normalized = value.replace("\\", "/").strip()
+    if any(ord(character) < 32 for character in normalized):
+        raise KernelContractError(f"{field_name} contains control characters")
+    path = PurePosixPath(normalized)
+    if (
+        not normalized
+        or path.is_absolute()
+        or ".." in path.parts
+        or (len(normalized) >= 2 and normalized[1] == ":")
+    ):
+        raise KernelContractError(f"{field_name} must be project-relative and non-escaping")
+    return path.as_posix()
+
+
 @dataclass(frozen=True, slots=True)
 class PermissionRequest:
     """Typed permission request evaluated before any runtime side effect."""
@@ -20,18 +38,21 @@ class PermissionRequest:
     git_write: bool = False
 
     def __post_init__(self) -> None:
-        if self.workspace_path is None:
-            return
-        value = str(self.workspace_path).replace("\\", "/").strip()
-        path = PurePosixPath(value)
-        if (
-            not value
-            or path.is_absolute()
-            or ".." in path.parts
-            or (len(value) >= 2 and value[1] == ":")
+        for name in (
+            "network_read",
+            "network_write",
+            "subprocess",
+            "private_memory",
+            "git_write",
         ):
-            raise KernelContractError("workspace_path must be project-relative and non-escaping")
-        object.__setattr__(self, "workspace_path", value)
+            if type(getattr(self, name)) is not bool:
+                raise KernelContractError(f"permission request {name} must be boolean")
+        if self.workspace_path is not None:
+            object.__setattr__(
+                self,
+                "workspace_path",
+                _project_relative_path(self.workspace_path, "workspace_path"),
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -55,6 +76,8 @@ class PermissionAuthorizer:
         tool_name: str | None,
         request: PermissionRequest,
     ) -> None:
+        if not isinstance(request, PermissionRequest):
+            raise KernelContractError("permission request must be PermissionRequest")
         missing = sorted(set(required_capabilities) - set(spec.capabilities))
         if missing:
             raise PermissionDeniedError(
@@ -70,10 +93,16 @@ class PermissionAuthorizer:
 
         scope = spec.permission_scope
         if request.workspace_path is not None:
-            allowed = any(
-                request.workspace_path == root
-                or request.workspace_path.startswith(root.rstrip("/") + "/")
+            requested = PurePosixPath(request.workspace_path)
+            roots = tuple(
+                PurePosixPath(_project_relative_path(root, "workspace root"))
                 for root in scope.workspace_roots
+            )
+            allowed = any(
+                root == PurePosixPath(".")
+                or requested == root
+                or root in requested.parents
+                for root in roots
             )
             if not allowed:
                 raise PermissionDeniedError(
@@ -86,9 +115,9 @@ class PermissionAuthorizer:
             "private_memory",
             "git_write",
         ):
+            if type(getattr(scope, name)) is not bool:
+                raise KernelContractError(f"permission scope {name} must be boolean")
             if getattr(request, name) and not getattr(scope, name):
                 raise PermissionDeniedError(
                     f"agent {spec.agent_id} lacks permission {name}"
                 )
-
-

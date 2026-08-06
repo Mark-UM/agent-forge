@@ -24,6 +24,7 @@ from .execution_support import (
 )
 from .permissions import PermissionRequest
 
+
 @dataclass(frozen=True, slots=True)
 class AgentCommand:
     command_id: str
@@ -52,6 +53,10 @@ class AgentCommand:
             "required_capabilities",
             tuple(_identifier(value, "capability") for value in self.required_capabilities),
         )
+        if not isinstance(self.remaining_budget, BudgetLimit):
+            raise KernelContractError("remaining_budget must be BudgetLimit")
+        if not isinstance(self.permission_request, PermissionRequest):
+            raise KernelContractError("permission_request must be PermissionRequest")
         if self.tool_name is not None:
             object.__setattr__(self, "tool_name", _identifier(self.tool_name, "tool_name"))
         if isinstance(self.attempt, bool) or not isinstance(self.attempt, int) or self.attempt != 1:
@@ -80,6 +85,12 @@ class AgentResult:
     def __post_init__(self) -> None:
         if not isinstance(self.status, AgentResultStatus):
             raise KernelContractError("agent result status must be AgentResultStatus")
+        if not isinstance(self.usage, BudgetUsage):
+            raise KernelContractError("agent result usage must be BudgetUsage")
+        if self.failure is not None and not isinstance(self.failure, FailureInfo):
+            raise KernelContractError("agent result failure must be FailureInfo")
+        if self.degraded is not None and not isinstance(self.degraded, DegradedInfo):
+            raise KernelContractError("agent result degraded must be DegradedInfo")
         object.__setattr__(
             self,
             "output",
@@ -97,6 +108,8 @@ class AgentResult:
             if not self.output or self.degraded is None or self.failure is not None:
                 raise KernelContractError("degraded AgentResult requires usable output and details")
         else:
+            if self.output:
+                raise KernelContractError("non-success AgentResult must not expose output")
             if self.failure is None or self.degraded is not None:
                 raise KernelContractError("non-success AgentResult requires failure information")
         if self.status is AgentResultStatus.CANCELLED and self.failure:
@@ -121,34 +134,57 @@ class AgentResult:
         code: str = "agent_failed",
         retryable: bool = False,
         usage: BudgetUsage | None = None,
+        details: Mapping[str, Any] | None = None,
     ) -> "AgentResult":
         return cls(
             AgentResultStatus.FAILED,
             usage=usage or BudgetUsage(),
-            failure=FailureInfo(category, message, retryable=retryable, code=code),
+            failure=FailureInfo(
+                category,
+                message,
+                retryable=retryable,
+                code=code,
+                details=details or {},
+            ),
         )
 
     @classmethod
-    def cancelled(cls, message: str = "execution cancelled") -> "AgentResult":
+    def cancelled(
+        cls,
+        message: str = "execution cancelled",
+        *,
+        usage: BudgetUsage | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> "AgentResult":
         return cls(
             AgentResultStatus.CANCELLED,
+            usage=usage or BudgetUsage(),
             failure=FailureInfo(
                 FailureCategory.CANCELLATION,
                 message,
                 retryable=False,
                 code="cancelled",
+                details=details or {},
             ),
         )
 
     @classmethod
-    def timed_out(cls, message: str = "execution timed out") -> "AgentResult":
+    def timed_out(
+        cls,
+        message: str = "execution timed out",
+        *,
+        usage: BudgetUsage | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> "AgentResult":
         return cls(
             AgentResultStatus.TIMED_OUT,
+            usage=usage or BudgetUsage(),
             failure=FailureInfo(
                 FailureCategory.TIMEOUT,
                 message,
                 retryable=False,
                 code="timed_out",
+                details=details or {},
             ),
         )
 
@@ -166,11 +202,13 @@ class AgentResult:
                 "code": self.failure.code,
                 "retryable": self.failure.retryable,
                 "message": self.failure.message,
+                "details": dict(self.failure.details),
             }
         if self.degraded is not None:
             summary["degraded"] = {
                 "summary": self.degraded.summary,
                 "missing_capabilities": list(self.degraded.missing_capabilities),
+                "details": dict(self.degraded.details),
             }
         return summary
 
@@ -188,7 +226,15 @@ class CancellationToken:
         self._reason = "execution cancelled"
 
     def cancel(self, reason: str = "execution cancelled") -> None:
-        self._reason = reason.strip() or "execution cancelled"
+        if not isinstance(reason, str):
+            raise KernelContractError("cancellation reason must be a string")
+        candidate = reason.strip() or "execution cancelled"
+        self._reason = FailureInfo(
+            FailureCategory.CANCELLATION,
+            candidate,
+            retryable=False,
+            code="cancelled",
+        ).message
         self._event.set()
 
     @property
@@ -222,5 +268,3 @@ class DeterministicAgentRuntime:
         if not isinstance(result, AgentResult):
             raise TypeError("AgentRuntime must return AgentResult")
         return result
-
-
