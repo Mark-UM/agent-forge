@@ -1,6 +1,6 @@
 # Agent Forge Roadmap
 
-Status date: 2026-08-05.
+Status date: 2026-08-06.
 
 This file contains unfinished product work. Archived proposals are design
 history, not delivery commitments.
@@ -18,24 +18,28 @@ Each weekly release should deliver one user-visible capability slice, preserve
 working entry points, and remove at least as much obsolete plumbing as it adds.
 3.0 is the stable consolidation after the 2.x train.
 
-## Foundation exit criteria
+## Foundation completion
 
-The pre-2.0 foundation is complete when one Windows branch head passes:
+Status: Completed on 2026-08-06.
 
-- fast security and integration contracts;
-- full pytest;
-- strict Manifest Registry validation;
-- Model Gateway no-bypass validation;
-- clean Vendor installation from the lock file;
-- Chromium installation;
-- real authenticated Browser/Scheduler Supervisor start, status, and stop;
-- trustworthy CI-generated test artifacts;
-- README and Architecture aligned with executable behavior.
+Evidence:
 
-Real user credentials and destructive recovery scenarios remain local smoke
-tests because they must not run on shared CI infrastructure.
+- foundation code commit: `b0d32fe114f1880646ece528ab1150e3070da6f5`;
+- final Windows release run: `31066789367`;
+- 2522 tests, 2519 passed, 3 skipped, 0 failures, and 0 errors;
+- clean Vendor/Chromium/Browser/Scheduler/Supervisor smoke passed;
+- PR #1 merged;
+- main push workflows passed.
+
+The pre-2.0 foundation is closed. The 2.0 Lightweight Multi-Agent Kernel is the
+next active milestone; its planned contents are not implemented yet. Live
+credentials and private data remain local-only acceptance and are not shared CI
+inputs. Destructive backup and restore drills remain later Roadmap work rather
+than a 2.0 prerequisite.
 
 ## 2.0 — Lightweight Multi-Agent Kernel
+
+Status: next active milestone; not implemented.
 
 Goal: move from one coding Agent plus review procedures to a small, typed Agent
 kernel without introducing a second platform.
