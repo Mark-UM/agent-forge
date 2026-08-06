@@ -31,7 +31,7 @@ def test_malformed_output_contract_fails_without_false_success(
 
     outcome = engine.execute_task(task.task_id, prefer_direct=False)
 
-    assert len(runtime.cals) == 1
+    assert len(runtime.calls) == 1
     assert outcome.task.status is TaskStatus.FAILED
     assert outcome.task.failure is not None
     assert outcome.task.failure.code == "contract_invalid"
