@@ -1,0 +1,60 @@
+name: Gateway contracts
+
+on:
+  push:
+    branches:
+      - main
+      - "agent/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  contracts:
+    name: Windows Gateway and Supervisor contracts
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install test runner
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Compile dispatch and runtime modules
+        run: python -m compileall -q modules/dispatch modules/runtime
+
+      - name: Validate manifests strictly
+        run: python -m modules.registry validate --strict
+
+      - name: Enforce Model Gateway ownership
+        run: python -m modules.dispatch.no_bypass
+
+      - name: Run Gateway and Supervisor contracts
+        run: >-
+          python -m pytest -q
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
+          modules/dispatch/tests/test_gateway.py
+          modules/dispatch/tests/test_no_bypass.py
+          modules/dispatch/tests/test_phase2_guard.py
+          modules/runtime/tests/test_supervisor.py

@@ -64,12 +64,12 @@
     "playwright": {
       "type": "local",
       "command": ["npx", "-y", "@playwright/mcp@latest"],
-      "enabled": true,
+      "enabled": false,
       "timeout": 30000
     },
     "fetch": {
       "type": "local",
-      "command": ["python", "-m", "modules.mcp.fetch_mcp", "serve"],
+      "command": ["python", "-m", "modules.mcp.secure_fetch_mcp", "serve"],
       "enabled": true,
       "timeout": 30000
     },
@@ -91,6 +91,12 @@
       "enabled": true,
       "timeout": 10000
     },
+    "search_pipeline": {
+      "type": "local",
+      "command": ["python", "-m", "modules.search.pipeline_mcp", "serve"],
+      "enabled": true,
+      "timeout": 60000
+    },
     "duckduckgo": {
       "type": "local",
       "command": ["python", "-m", "duckduckgo_mcp_server"],
@@ -103,7 +109,7 @@
       "environment": {
         "SEARXNG_URL": "https://searx.be"
       },
-      "enabled": true,
+      "enabled": false,
       "timeout": 30000
     },
     "g-search": {
@@ -118,19 +124,19 @@
       "environment": {
         "SERPER_API_KEY": "{env:SERPER_API_KEY}"
       },
-      "enabled": true,
+      "enabled": false,
       "timeout": 30000
     },
     "arxiv": {
       "type": "local",
       "command": ["python", "-m", "modules.search.arxiv_mcp", "serve"],
-      "enabled": true,
+      "enabled": false,
       "timeout": 30000
     },
     "semantic_scholar": {
       "type": "local",
       "command": ["python", "-m", "modules.search.semantic_scholar_mcp", "serve"],
-      "enabled": true,
+      "enabled": false,
       "timeout": 30000
     }
   }

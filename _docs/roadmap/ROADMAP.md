@@ -1,59 +1,211 @@
-# AgentForge Roadmap
+# Agent Forge Roadmap
 
-Status date: 2026-08-02. Only unfinished/proposed work belongs here. Archived
-plans are design history, not delivery commitments.
+Status date: 2026-08-05.
 
-## Priority 0 — Continuous integrity
+This file contains unfinished product work. Archived proposals are design
+history, not delivery commitments.
 
-- Add CI for Python 3.11 dependency installation, tests, JSON validation,
-  secret scanning, manifest/document path checks, and lock drift.
-- Pin or deliberately vendor-lock OpenCode plugins and npm MCP packages that
-  still use `latest` or unbounded `npx -y` resolution.
-- Add a tracked, license-aware installer for approved external skill
-  repositories and junction creation.
-- Decide whether the fixed public SearXNG endpoint is acceptable or must become
-  ignored local configuration.
-- Add a safe cleanup utility that selects only cache files by explicit suffix,
-  produces a dry-run inventory, validates every resolved target, and creates a
-  recoverable manifest before deletion.
+## Release policy
 
-Exit: a clean clone is reproducible in CI and destructive maintenance cannot
-silently broaden its target set.
+Agent Forge uses a weekly **2.x release train**, not a destructive semantic
+major every week:
 
-## Priority 1 — Executable workflow contracts
+```text
+2.0 -> 2.1 -> 2.2 -> ... -> 2.6 -> 3.0
+```
 
-- Bind Search orchestration to explicit provider callbacks or keep `/search`
-  purely procedural and reduce duplicate orchestration claims.
-- Turn `/deliver` into one reproducible executable coordinator, or continue to
-  document its procedural/heuristic boundary consistently.
-- Decide whether explicit Memory lesson calls from `/review` are sufficient or
-  require a typed event interface. Automatic conversation capture remains out
-  of scope unless separately designed and consented to.
+Each weekly release should deliver one user-visible capability slice, preserve
+working entry points, and remove at least as much obsolete plumbing as it adds.
+3.0 is the stable consolidation after the 2.x train.
 
-Exit: every advertised workflow has one authoritative executable contract or a
-clearly procedural contract.
+## Foundation exit criteria
 
-## Priority 2 — Reliability and observability
+The pre-2.0 foundation is complete when one Windows branch head passes:
 
-- Add structured retry budgets and circuit breakers for external providers.
-- Define shared event/result envelopes across Search, Prompt, Dispatch,
-  Scheduler, Vision, and collection.
-- Add lifecycle supervision, health polling, and graceful restart policy for
-  Browser and Scheduler daemons.
-- Define retention, backup, and restore policy for private runtime databases,
-  reports, Memory, and recovery evidence.
-- Replace broad regex authority heuristics with an evidence-based source policy.
+- fast security and integration contracts;
+- full pytest;
+- strict Manifest Registry validation;
+- Model Gateway no-bypass validation;
+- clean Vendor installation from the lock file;
+- Chromium installation;
+- real authenticated Browser/Scheduler Supervisor start, status, and stop;
+- trustworthy CI-generated test artifacts;
+- README and Architecture aligned with executable behavior.
 
-## Priority 3 — Simplification
+Real user credentials and destructive recovery scenarios remain local smoke
+tests because they must not run on shared CI infrastructure.
 
-- Consolidate repeated MCP JSON-RPC plumbing while retaining standalone CLIs.
-- Separate reusable static checks from project-specific TypeScript/Vite rules.
-- Introduce typed Search stage/result contracts instead of loose dictionaries.
-- Evaluate a smaller browser-use dependency profile if upstream supports one;
-  the current `[core]` environment is reproducible but large.
+## 2.0 — Lightweight Multi-Agent Kernel
 
-## Deferred research
+Goal: move from one coding Agent plus review procedures to a small, typed Agent
+kernel without introducing a second platform.
 
-Multi-agent coding clusters, autonomous self-evolution/pattern extraction,
-federated learning, and broad desktop automation remain exploratory. Original
-proposals are under `archive/` and must not be interpreted as current features.
+Deliver:
+
+- `Task`, `AgentSpec`, `Handoff`, `Artifact`, and `Approval` contracts;
+- Coordinator, Worker, and combined Reviewer/Tester roles;
+- Agent-as-tool and explicit Handoff execution;
+- shared Model Gateway, Run/Step/Event, Search, Browser, Memory, and Scheduler;
+- finite step, token, time, and retry budgets;
+- one SQLite task/checkpoint authority;
+- a simple single-file task completed end to end.
+
+Framework strategy:
+
+- first PoC: OpenAI Agents SDK **or** PydanticAI;
+- select one after a measured DeepSeek/MCP integration comparison;
+- do not ship two primary orchestration frameworks;
+- ordinary short tasks remain direct function/tool calls.
+
+Non-goals:
+
+- A2A federation;
+- dashboards;
+- distributed queues;
+- autonomous modification of `main`;
+- ten or more permanent Agent roles.
+
+## 2.1 — Durable execution
+
+Goal: pause, resume, cancel, and recover multi-step work.
+
+Deliver:
+
+- checkpoint after every completed subtask;
+- restart from the latest valid checkpoint;
+- cancellation and timeout propagation;
+- isolated Git worktree Workspace per coding task;
+- bounded rollback to the pre-task tree;
+- optional LangGraph adapter only for long-running durable workflows.
+
+## 2.2 — Capability-based Agent aggregation
+
+Goal: select and combine Agents by capability rather than hard-coded role
+chains.
+
+Deliver:
+
+- capability query over the existing Registry;
+- cost, latency, readiness, and permission-aware Agent selection;
+- parallel execution only for dependency-independent tasks;
+- typed Artifact merge instead of chat-text concatenation;
+- Reviewer/Tester added dynamically when task risk warrants it;
+- deterministic conflict and retry rules.
+
+## 2.3 — Context, Memory, and Search convergence
+
+Goal: one retrieval surface for working context and private knowledge.
+
+Deliver:
+
+- SQLite FTS5 as the default lightweight local index;
+- optional `sqlite-vec` behind a feature flag;
+- ChromaDB retained only as an optional compatibility/profile dependency;
+- Session working memory distinct from approved long-term Memory;
+- shared retrieval result contracts across Search, Context, and Memory;
+- token-budget-aware context assembly;
+- explicit source and freshness evidence.
+
+## 2.4 — External Agent interoperability
+
+Goal: connect independent Agents only when cross-process or cross-system
+collaboration is actually needed.
+
+Deliver:
+
+- optional A2A Client/Server adapter;
+- Agent Card generated from Capability Registry data;
+- MCP capability mapping;
+- external Agent allowlist and data-sharing policy;
+- no exposure of private Memory or internal tool implementation by default.
+
+Internal Coordinator/Worker communication continues to use typed function
+Handoffs, not A2A.
+
+## 2.5 — Evaluation and controlled improvement
+
+Goal: improve measurable task outcomes without self-modifying production code.
+
+Deliver:
+
+- a small repository-specific benchmark of real maintenance tasks;
+- a bounded SWE-bench subset through an optional sandbox executor;
+- success, cost, duration, retry, and regression metrics;
+- failure clustering and proposed improvement Candidates;
+- automatic branch/PR proposals only after tests;
+- explicit human approval before merge or durable policy changes.
+
+OpenHands may be evaluated as an optional Docker/Workspace execution adapter;
+it must not become a startup dependency.
+
+## 2.6 — Operator experience and release speed
+
+Goal: make the existing system easier to inspect and upgrade without a heavy web
+platform.
+
+Deliver:
+
+- compact CLI/TUI Run tree using Rich;
+- pause, resume, cancel, and approve commands;
+- `uv`-based optional developer workflow and reproducible dependency profiles;
+- automated release notes from merged PRs and capability changes;
+- one-command backup and restore for private SQLite/Memory state;
+- migration preview and rollback.
+
+## 3.0 — Stable Agent Workspace
+
+3.0 means the following pieces work together and are supportable:
+
+```text
+lightweight Agent Kernel
++ pluggable Multi-Agent roles
++ MCP tool ecosystem
++ recoverable Workspace execution
++ local-first Search and Memory
++ optional external Agent interoperability
++ measurable weekly release process
+```
+
+3.0 is not defined by the number of Agents, Skills, rules, documents, or
+frameworks.
+
+## Engineering constraints
+
+### Keep
+
+- private local operation;
+- bounded file/network/process behavior;
+- one authority per state domain;
+- thin adapters around maintained open-source components;
+- Windows-first release checks;
+- explicit degraded behavior.
+
+### Avoid
+
+- enterprise RBAC and Kubernetes;
+- duplicate model clients or caches;
+- framework-specific rules applied to unrelated projects;
+- remote tracing enabled by default;
+- approval gates for ordinary read-only local work;
+- hand-written test-count claims;
+- multiple overlapping orchestration engines;
+- dashboards before core task completion is reliable.
+
+## Candidate open-source components
+
+Evaluate components through short PoCs and retain only one solution per role:
+
+| Need | Preferred direction |
+|---|---|
+| lightweight Agent/Handoff kernel | OpenAI Agents SDK or PydanticAI |
+| durable long tasks | optional LangGraph adapter |
+| provider compatibility | LiteLLM SDK inside Model Gateway, no Proxy by default |
+| MCP plumbing | official MCP Python SDK |
+| local text retrieval | SQLite FTS5 |
+| optional vector retrieval | `sqlite-vec` feature flag |
+| terminal inspection | Rich |
+| isolated software execution | optional OpenHands adapter |
+| Python environment/dev speed | `uv` and Ruff |
+
+Every addition must replace real custom code or unlock a measurable capability;
+star count alone is not an adoption criterion.

@@ -1,23 +1,42 @@
 {
   "name": "delivery",
-  "version": "1.0.0",
-  "description": "Final delivery gate running 6 check categories (engineering, resource, integration, i18n, test_quality, architecture) with Markdown/JSON reporters",
+  "version": "2.0.0",
+  "description": "Profile-aware delivery checks that always apply generic rules and activate Python, TypeScript/Vite, Three.js, or Tower Stack rules only from explicit project evidence",
   "entrypoints": {
-    "cli": "python -m modules.delivery.checklist"
+    "cli": "python -m modules.delivery",
+    "python": "python -m modules.delivery.checklist --help"
   },
   "capabilities": [
-    {"name": "delivery.checklist", "version": "1.0", "description": "Run 6-category delivery checklist against a target project with whitelists and emit PASS/FAIL findings with per-category summaries (checklist.py, reporter.py)"}
+    {
+      "name": "delivery.profiled_check",
+      "version": "2.0",
+      "description": "Auto-detect project profiles and execute only applicable generic/framework/project rules"
+    },
+    {
+      "name": "delivery.legacy_checklist",
+      "version": "1.0",
+      "description": "Explicit compatibility entry for the historical six-category checklist"
+    }
   ],
   "dependencies": {
     "required": ["Python standard library"],
-    "optional": ["modules.integration_check (delegated category 3 integration checks)"]
+    "optional": ["modules.integration_check for the explicit legacy checklist"]
   },
   "credentials": [],
   "health_checks": [
-    {"command": "python -m modules.delivery.checklist --help", "description": "Verify delivery checklist CLI loads", "timeout": 30}
+    {
+      "command": "python -m modules.delivery --help",
+      "description": "Verify the profile-aware canonical Delivery CLI loads",
+      "timeout": 30
+    }
   ],
   "storage": [
-    {"type": "none", "path": "", "tables": [], "description": "No persistent storage; reports are printed to stdout"}
+    {
+      "type": "none",
+      "path": "",
+      "tables": [],
+      "description": "No persistent storage; structured reports are printed to stdout"
+    }
   ],
   "experimental": false
 }

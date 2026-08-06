@@ -1,20 +1,84 @@
 {
-  "module": "orchestrator",
-  "version": "1.8.1",
-  "description": "Local collection, file indexing, action extraction, and schedule storage helpers",
-  "components": {
-    "agent_wrapper.py": "HTTP(S)-validated collection pipeline: browser-use Agent, local Browser daemon/Vision, then static fetch fallback",
-    "file_indexer.py": "Optional ChromaDB-backed Markdown/text indexing",
-    "action_extractor.py": "Model-assisted action extraction with schedule persistence",
-    "schedule_store.py": "SQLite schedule CRUD under _runtime/mcp-sqlite.db"
+  "name": "orchestrator",
+  "version": "2.0.0",
+  "description": "Secure local collection, root-safe file indexing, model-assisted action extraction, and SQLite schedule persistence",
+  "entrypoints": {
+    "cli": "python -m modules.orchestrator.agent_wrapper status",
+    "python": "python -m modules.orchestrator.file_indexer stats"
   },
+  "capabilities": [
+    {
+      "name": "orchestrator.collection",
+      "version": "2.0",
+      "description": "Collect public web content through the authenticated Browser daemon and secure Fetch fallback"
+    },
+    {
+      "name": "orchestrator.file_index",
+      "version": "2.0",
+      "description": "Index Markdown and text files into ChromaDB with canonical root ownership and root-scoped stale cleanup"
+    },
+    {
+      "name": "orchestrator.action_extract",
+      "version": "1.0",
+      "description": "Extract structured action items from reports with explicit status and validation semantics"
+    },
+    {
+      "name": "orchestrator.schedule_store",
+      "version": "1.0",
+      "description": "Persist action schedules in the shared SQLite runtime database"
+    }
+  ],
   "dependencies": {
-    "required": ["Python standard library", "dependencies pinned by requirements.txt"],
-    "optional": ["local Browser daemon", "SiliconFlow key", "BrowserUse/DeepSeek/Anthropic key"]
+    "required": [
+      "Python standard library",
+      "modules.common.security",
+      "modules.mcp.secure_fetch_mcp"
+    ],
+    "optional": [
+      "authenticated local Browser daemon",
+      "chromadb",
+      "Vision provider",
+      "browser-use through the explicit reduced-security override"
+    ]
   },
-  "limitations": [
-    "browser-use autonomous collection requires a supported LLM key",
-    "daemon collection requires the Browser daemon to be started separately; static fetch remains the final fallback",
-    "generated Markdown reports are confined to ignored _runtime or OS temporary storage"
-  ]
+  "credentials": [
+    {
+      "env": "SILICONFLOW_API_KEY",
+      "required": false,
+      "description": "Optional credential for action extraction and Vision enrichment"
+    }
+  ],
+  "health_checks": [
+    {
+      "command": "python -m modules.orchestrator.agent_wrapper status",
+      "description": "Report secure collection backend readiness without exposing bearer tokens",
+      "timeout": 30
+    },
+    {
+      "command": "python -m modules.orchestrator.file_indexer stats",
+      "description": "Verify the optional file indexer imports and reports storage status",
+      "timeout": 30
+    }
+  ],
+  "storage": [
+    {
+      "type": "chromadb",
+      "path": "_runtime/search/chroma",
+      "tables": [],
+      "description": "Optional root-owned Markdown and text semantic index"
+    },
+    {
+      "type": "sqlite",
+      "path": "_runtime/mcp-sqlite.db",
+      "tables": ["schedules"],
+      "description": "Action schedule persistence shared with Scheduler"
+    },
+    {
+      "type": "markdown",
+      "path": "_runtime/reports",
+      "tables": [],
+      "description": "Generated collection and action review reports"
+    }
+  ],
+  "experimental": false
 }

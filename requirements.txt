@@ -1,6 +1,7 @@
 # Direct runtime dependencies. Exact versions are selected from the recovered
 # environment where available; requirements.lock.txt records the resolved set.
 APScheduler==3.11.3
+tzdata==2026.3
 browser-use[core]==0.13.6
 playwright==1.62.0
 Pillow==12.2.0

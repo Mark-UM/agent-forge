@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "agent/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  security-contracts:
+    name: Windows security and core contracts
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install fast-gate dependencies
+        run: >-
+          python -m pip install --upgrade
+          pip pytest APScheduler==3.11.3 tzdata==2026.3
+
+      - name: Compile first-party modules
+        run: python -m compileall -q modules
+
+      - name: Validate capability manifests strictly
+        run: python -m modules.registry validate --strict
+
+      - name: Enforce Model Gateway ownership
+        run: python -m modules.dispatch.no_bypass
+
+      - name: Run Windows security and integration contracts
+        run: >-
+          python -m pytest -q
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
+          modules/common/tests/test_security.py
+          modules/common/tests/test_run_reduction_hardening.py
+          modules/mcp/tests/test_sqlite_read_only.py
+          modules/mcp/tests/test_secure_fetch_mcp.py
+          modules/mcp/tests/test_sqlite_mcp.py
+          modules/browser/tests/test_daemon_security.py
+          modules/browser/tests/test_daemon.py
+          modules/orchestrator/tests/test_collection_security.py
+          modules/orchestrator/tests/test_agent_wrapper.py
+          modules/orchestrator/tests/test_file_indexer_roots.py
+          modules/orchestrator/tests/test_file_indexer.py
+          modules/orchestrator/tests/test_action_extractor.py
+          modules/search/tests/test_hardened_service.py
+          modules/search/tests/test_contract_phase1.py
+          modules/search/tests/test_filter.py
+          modules/search/tests/test_orchestrator.py
+          modules/search/tests/test_cache_store.py
+          modules/search/tests/test_planner.py
+          modules/search/tests/test_i18n.py
+          modules/search/tests/test_summarize.py
+          modules/search/tests/test_aggregator.py
+          modules/search/tests/test_quality.py
+          modules/dispatch/tests/test_gateway.py
+          modules/dispatch/tests/test_no_bypass.py
+          modules/dispatch/tests/test_phase2_guard.py
+          modules/vision/tests/test_reducer.py
+          modules/vision/tests/test_recognize_reducer_integration.py
+          modules/memory/tests/test_candidates.py
+          modules/memory/tests/test_cli.py
+          modules/delivery/tests/test_profiles.py
+          modules/scheduler/tests/test_trigger_runtime.py
+          modules/scheduler/tests/test_r2_scheduler.py
+          modules/runtime/tests/test_supervisor.py
+          modules/registry/tests/test_registry.py
+          modules/registry/tests/test_strict_discovery.py
+          modules/prompt/tests/test_classify.py
+          modules/prompt/tests/test_context_composition.py
+          modules/prompt/tests/test_context.py
+
+  full-test-suite:
+    name: Full suite (windows-latest)
+    needs: security-contracts
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install project and test dependencies
+        run: python -m pip install --upgrade pip pytest -r requirements.txt
+
+      - name: Compile first-party modules
+        run: python -m compileall -q modules
+
+      - name: Validate capability manifests strictly
+        run: python -m modules.registry validate --strict
+
+      - name: Enforce Model Gateway ownership
+        run: python -m modules.dispatch.no_bypass
+
+      - name: Run complete Windows pytest suite
+        run: >-
+          python -m pytest -q
+          -W error::pytest.PytestUnhandledThreadExceptionWarning
+          --junitxml=_runtime/test-results/windows-pytest.xml
+
+      - name: Upload Windows test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pytest-results
+          path: _runtime/test-results/windows-pytest.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-release-smoke:
+    name: Clean Windows vendor, Chromium, and Supervisor smoke
+    needs: full-test-suite
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock.txt
+
+      - name: Install and smoke the local Windows runtime
+        shell: powershell
+        run: ./scripts/windows-release-smoke.ps1
+
+      - name: Upload Supervisor logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-supervisor-smoke-logs
+          path: _runtime/supervisor/logs
+          if-no-files-found: warn
+          retention-days: 14

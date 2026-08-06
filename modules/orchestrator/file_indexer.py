@@ -1,44 +1,34 @@
 #!/usr/bin/env python3
-"""文件索引器 — 复用 ChromaDB，索引 _data/memory/ 和 _runtime/reports/ 下的文件。
+"""Root-safe ChromaDB file indexer with legacy compatibility.
 
-Design:
-- 复用 modules/search/semantic.py 的 ChromaDB 集成模式
-- 增量扫描（按 mtime 检测变更）
-- 独立 collection（memory_files），不污染 search_history
-- 降级：ChromaDB 不可用时返回空结果
-
-Usage:
-    from modules.orchestrator.file_indexer import index_directory, search_files
-
-    index_directory(root="_data/memory")
-    results = search_files("Python 技术栈", top_k=5)
+New records use stable ``root_id + relative_path`` ownership, so stale cleanup
+can never delete another indexed root.  Historical helper signatures and MD5
+record identifiers remain readable for incremental migration.
 """
-import os
-import sys
-import glob
+from __future__ import annotations
+
+from datetime import datetime, timezone
 import hashlib
 import json
-from datetime import datetime
+import os
 from pathlib import Path
+import sys
 from typing import Optional
 
 from modules.bootstrap.dependencies import activate_vendor_path
 
 activate_vendor_path()
 
-# ── Paths ──────────────────────────────────────────────────────
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _CHROMA_DIR = _PROJECT_ROOT / "_runtime" / "search" / "chroma"
 _DEFAULT_COLLECTION = "memory_files"
 
-# ── Lazy ChromaDB import (same pattern as semantic.py) ────────
 _chromadb_available = None
 _client = None
-_collections = {}  # cache per collection name
+_collections: dict[str, object] = {}
 
 
 def _check_chromadb() -> bool:
-    """Check if chromadb is available. Lazy import + cache."""
     global _chromadb_available
     if _chromadb_available is not None:
         return _chromadb_available
@@ -51,18 +41,15 @@ def _check_chromadb() -> bool:
 
 
 def _get_collection(collection_name: str = _DEFAULT_COLLECTION):
-    """Get or init ChromaDB collection. Returns None on failure."""
     global _client, _collections
-
     if collection_name in _collections:
         return _collections[collection_name]
-
     if not _check_chromadb():
         return None
-
     try:
         import chromadb
-        os.makedirs(str(_CHROMA_DIR), exist_ok=True)
+
+        _CHROMA_DIR.mkdir(parents=True, exist_ok=True)
         if _client is None:
             _client = chromadb.PersistentClient(path=str(_CHROMA_DIR))
         collection = _client.get_or_create_collection(
@@ -71,152 +58,228 @@ def _get_collection(collection_name: str = _DEFAULT_COLLECTION):
         )
         _collections[collection_name] = collection
         return collection
-    except Exception as e:
-        print(f"[file_indexer] WARNING: ChromaDB init failed: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[file_indexer] WARNING: ChromaDB init failed: {exc}", file=sys.stderr)
         return None
 
 
-# ── File scanning ──────────────────────────────────────────────
+def canonical_root(root: str | os.PathLike[str]) -> Path:
+    path = Path(root).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"index root does not exist: {path}")
+    if not path.is_dir():
+        raise NotADirectoryError(f"index root is not a directory: {path}")
+    return path
 
 
-def _scan_files(root: str, patterns: list) -> list:
-    """Scan root directory for files matching patterns."""
-    root_path = Path(root)
-    if not root_path.exists():
+def root_identifier(root: str | os.PathLike[str]) -> str:
+    path = canonical_root(root)
+    normalized = os.path.normcase(str(path))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+
+
+def document_identifier(root_id: str, relative_path: str) -> str:
+    normalized = relative_path.replace("\\", "/")
+    return hashlib.sha256(f"{root_id}:{normalized}".encode("utf-8")).hexdigest()[:32]
+
+
+def _legacy_document_identifier(path: str | os.PathLike[str]) -> str:
+    return hashlib.md5(str(path).encode("utf-8")).hexdigest()[:16]
+
+
+def _scan_files(
+    root: str | os.PathLike[str], patterns: list[str]
+) -> list[str]:
+    """Return sorted absolute file names; missing roots produce an empty list."""
+
+    root_path = Path(root).expanduser()
+    if not root_path.is_dir():
         return []
-
-    files = []
+    files: set[Path] = set()
     for pattern in patterns:
-        for f in root_path.rglob(pattern):
-            if f.is_file():
-                files.append(str(f))
-    # Deduplicate
-    return list(set(files))
+        for candidate in root_path.rglob(pattern):
+            if candidate.is_file():
+                files.add(candidate.resolve())
+    return [str(path) for path in sorted(files, key=lambda item: item.as_posix().lower())]
 
 
-def _file_hash(filepath: str) -> str:
-    """Compute MD5 hash of file content for change detection."""
-    h = hashlib.md5()
-    with open(filepath, "rb") as f:
-        while True:
-            chunk = f.read(8192)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _read_file_content(filepath: str, max_chars: int = 10000) -> str:
-    """Read file content, truncate to max_chars."""
+def _read_file_content(
+    path: str | os.PathLike[str], max_chars: int = 10_000
+) -> str:
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read(max_chars)
-        return content
-    except (UnicodeDecodeError, IOError):
+        return Path(path).read_text(encoding="utf-8")[:max_chars]
+    except (UnicodeDecodeError, OSError):
         return ""
 
 
-# ── Public API ─────────────────────────────────────────────────
+def _file_hash(path: str | os.PathLike[str]) -> str:
+    """Historical content hash helper retained for callers and migrations."""
+
+    content = _read_file_content(path)
+    return hashlib.md5(content.encode("utf-8")).hexdigest()
+
+
+def _belongs_to_root(filepath: str, root: Path) -> bool:
+    if not filepath:
+        return False
+    try:
+        Path(filepath).expanduser().resolve().relative_to(root)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _collection_rows(collection, *, root: Path, root_id: str) -> dict[str, dict]:
+    data = None
+    try:
+        data = collection.get(where={"root_id": root_id})
+    except Exception:
+        try:
+            data = collection.get()
+        except Exception:
+            return {}
+    if not isinstance(data, dict):
+        return {}
+    ids = list(data.get("ids", []) or [])
+    metadatas = list(data.get("metadatas", []) or [])
+    rows: dict[str, dict] = {}
+    for index, doc_id in enumerate(ids):
+        metadata = metadatas[index] if index < len(metadatas) else {}
+        metadata = metadata if isinstance(metadata, dict) else {}
+        owner = metadata.get("root_id")
+        if owner == root_id:
+            rows[str(doc_id)] = metadata
+        elif not owner and _belongs_to_root(str(metadata.get("filepath", "")), root):
+            rows[str(doc_id)] = metadata
+    return rows
+
+
+def _legacy_metadata(collection, path: Path) -> tuple[str, dict] | None:
+    legacy_id = _legacy_document_identifier(str(path))
+    try:
+        data = collection.get(ids=[legacy_id])
+    except Exception:
+        return None
+    if not isinstance(data, dict) or legacy_id not in (data.get("ids", []) or []):
+        return None
+    metadatas = data.get("metadatas", []) or []
+    metadata = metadatas[0] if metadatas and isinstance(metadatas[0], dict) else {}
+    return legacy_id, metadata
 
 
 def index_directory(
     root: str,
-    glob_patterns: list = None,
+    glob_patterns: Optional[list[str]] = None,
     incremental: bool = True,
     collection_name: str = _DEFAULT_COLLECTION,
 ) -> dict:
-    """Index files in root directory to ChromaDB.
-
-    Args:
-        root: Directory to scan
-        glob_patterns: File patterns to match (default: ["*.md", "*.txt"])
-        incremental: If True, skip unchanged files (by mtime + hash)
-        collection_name: ChromaDB collection name
-
-    Returns:
-        dict: {indexed_count, skipped_count, deleted_count, total_files}
-    """
-    if glob_patterns is None:
-        glob_patterns = ["*.md", "*.txt"]
-
+    patterns = glob_patterns or ["*.md", "*.txt"]
+    try:
+        root_path = canonical_root(root)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        return {
+            "success": False,
+            "indexed_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "deleted_count": 0,
+            "cleanup_skipped": True,
+            "total_files": 0,
+            "error": str(exc),
+        }
+    root_id = root_identifier(root_path)
     collection = _get_collection(collection_name)
     if collection is None:
         return {
+            "success": False,
+            "root_id": root_id,
+            "root_path": str(root_path),
             "indexed_count": 0,
             "skipped_count": 0,
+            "failed_count": 0,
             "deleted_count": 0,
+            "cleanup_skipped": True,
             "total_files": 0,
             "error": "ChromaDB not available",
         }
 
-    files = _scan_files(root, glob_patterns)
+    files = _scan_files(root_path, patterns)
+    existing = _collection_rows(collection, root=root_path, root_id=root_id)
+    current_ids: set[str] = set()
     indexed = 0
     skipped = 0
+    failed = 0
 
-    # Get existing indexed file IDs
-    existing_ids = set()
-    try:
-        all_data = collection.get()
-        existing_ids = set(all_data.get("ids", []))
-    except Exception:
-        pass
-
-    current_ids = set()
-
-    for filepath in files:
-        # Use file path as document ID (sanitized)
-        doc_id = hashlib.md5(filepath.encode("utf-8")).hexdigest()[:16]
+    for raw_path in files:
+        path = Path(raw_path).resolve()
+        relative_path = path.relative_to(root_path).as_posix()
+        doc_id = document_identifier(root_id, relative_path)
         current_ids.add(doc_id)
-
         try:
-            mtime = os.path.getmtime(filepath)
-            content = _read_file_content(filepath)
-            content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+            content = _read_file_content(path)
+            content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            legacy_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+            previous = existing.get(doc_id)
+            legacy_record = None
+            if previous is None and incremental:
+                legacy_record = _legacy_metadata(collection, path)
+                if legacy_record is not None:
+                    legacy_id, previous = legacy_record
+                    current_ids.add(legacy_id)
+            previous = previous or {}
+            if incremental and previous.get("content_hash") in {
+                content_hash,
+                legacy_hash,
+            }:
+                skipped += 1
+                continue
 
-            # Check if file changed (incremental)
-            if incremental and doc_id in existing_ids:
-                try:
-                    meta = collection.get(ids=[doc_id])
-                    stored_hash = meta.get("metadatas", [{}])[0].get("content_hash", "")
-                    if stored_hash == content_hash:
-                        skipped += 1
-                        continue
-                except Exception:
-                    pass  # Re-index on error
-
-            # Index the file
             metadata = {
-                "filepath": filepath,
-                "mtime": mtime,
+                "filepath": str(path),
+                "root_id": root_id,
+                "root_path": str(root_path),
+                "relative_path": relative_path,
+                "mtime": path.stat().st_mtime,
                 "content_hash": content_hash,
-                "indexed_at": datetime.now().isoformat(),
+                "indexed_at": datetime.now(timezone.utc).isoformat(),
             }
-
             collection.upsert(
                 ids=[doc_id],
                 documents=[content],
                 metadatas=[metadata],
             )
             indexed += 1
+        except Exception as exc:
+            failed += 1
+            print(
+                f"[file_indexer] WARNING: failed to index {path}: {exc}",
+                file=sys.stderr,
+            )
 
-        except Exception as e:
-            print(f"[file_indexer] WARNING: failed to index {filepath}: {e}", file=sys.stderr)
-            skipped += 1
-
-    # Remove deleted files from index
     deleted = 0
-    stale_ids = existing_ids - current_ids
-    if stale_ids:
-        try:
-            collection.delete(ids=list(stale_ids))
-            deleted = len(stale_ids)
-        except Exception:
-            pass
+    cleanup_skipped = failed > 0
+    if not cleanup_skipped:
+        stale_ids = set(existing) - current_ids
+        if stale_ids:
+            try:
+                collection.delete(ids=sorted(stale_ids))
+                deleted = len(stale_ids)
+            except Exception as exc:
+                cleanup_skipped = True
+                print(
+                    f"[file_indexer] WARNING: stale cleanup failed for {root_path}: {exc}",
+                    file=sys.stderr,
+                )
 
     return {
+        "success": failed == 0,
+        "root_id": root_id,
+        "root_path": str(root_path),
         "indexed_count": indexed,
         "skipped_count": skipped,
+        "failed_count": failed,
         "deleted_count": deleted,
+        "cleanup_skipped": cleanup_skipped,
         "total_files": len(files),
     }
 
@@ -225,53 +288,46 @@ def search_files(
     query: str,
     collection_name: str = _DEFAULT_COLLECTION,
     top_k: int = 5,
-) -> list:
-    """Semantic search indexed files.
-
-    Args:
-        query: Search query
-        collection_name: ChromaDB collection name
-        top_k: Number of results
-
-    Returns:
-        list[dict]: [{filepath, content_preview, score, metadata}]
-    """
+    root: Optional[str] = None,
+) -> list[dict]:
     collection = _get_collection(collection_name)
     if collection is None:
         return []
-
+    kwargs: dict = {"query_texts": [query], "n_results": top_k}
+    if root is not None:
+        try:
+            kwargs["where"] = {"root_id": root_identifier(root)}
+        except (FileNotFoundError, NotADirectoryError):
+            return []
     try:
-        results = collection.query(
-            query_texts=[query],
-            n_results=top_k,
-        )
-
-        docs = results.get("documents", [[]])[0]
-        metas = results.get("metadatas", [[]])[0]
+        results = collection.query(**kwargs)
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
         distances = results.get("distances", [[]])[0]
-
-        output = []
-        for i, (doc, meta, dist) in enumerate(zip(docs, metas, distances)):
-            output.append({
-                "filepath": meta.get("filepath", ""),
-                "content_preview": doc[:500] if doc else "",
-                "score": 1 - dist if dist is not None else 0,  # Convert distance to similarity
-                "metadata": meta,
-                "rank": i + 1,
-            })
+        output: list[dict] = []
+        for rank, (document, metadata, distance) in enumerate(
+            zip(documents, metadatas, distances), start=1
+        ):
+            metadata = metadata or {}
+            output.append(
+                {
+                    "filepath": metadata.get("filepath", ""),
+                    "content_preview": document[:500] if document else "",
+                    "score": 1 - distance if distance is not None else 0,
+                    "metadata": metadata,
+                    "rank": rank,
+                }
+            )
         return output
-
-    except Exception as e:
-        print(f"[file_indexer] WARNING: search failed: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[file_indexer] WARNING: search failed: {exc}", file=sys.stderr)
         return []
 
 
-def get_index_stats(collection_name: str = _DEFAULT_COLLECTION) -> dict:
-    """Get index statistics.
-
-    Returns:
-        dict: {total_documents, collection_name, chromadb_available}
-    """
+def get_index_stats(
+    collection_name: str = _DEFAULT_COLLECTION,
+    root: Optional[str] = None,
+) -> dict:
     collection = _get_collection(collection_name)
     if collection is None:
         return {
@@ -279,13 +335,19 @@ def get_index_stats(collection_name: str = _DEFAULT_COLLECTION) -> dict:
             "collection_name": collection_name,
             "chromadb_available": _check_chromadb(),
         }
-
     try:
-        data = collection.get()
+        if root is None:
+            data = collection.get()
+            root_id = None
+        else:
+            root_path = canonical_root(root)
+            root_id = root_identifier(root_path)
+            data = collection.get(where={"root_id": root_id})
         return {
             "total_documents": len(data.get("ids", [])),
             "collection_name": collection_name,
             "chromadb_available": True,
+            "root_id": root_id,
         }
     except Exception:
         return {
@@ -295,18 +357,19 @@ def get_index_stats(collection_name: str = _DEFAULT_COLLECTION) -> dict:
         }
 
 
-def clear_index(collection_name: str = _DEFAULT_COLLECTION) -> bool:
-    """Clear all documents from a collection.
-
-    Returns:
-        bool: True if cleared successfully
-    """
+def clear_index(
+    collection_name: str = _DEFAULT_COLLECTION,
+    root: Optional[str] = None,
+) -> bool:
     collection = _get_collection(collection_name)
     if collection is None:
         return False
-
     try:
-        data = collection.get()
+        if root is None:
+            data = collection.get()
+        else:
+            root_path = canonical_root(root)
+            data = collection.get(where={"root_id": root_identifier(root_path)})
         ids = data.get("ids", [])
         if ids:
             collection.delete(ids=ids)
@@ -315,27 +378,27 @@ def clear_index(collection_name: str = _DEFAULT_COLLECTION) -> bool:
         return False
 
 
-if __name__ == "__main__":
-    # CLI: python -m modules.orchestrator.file_indexer [index|search|stats]
-    if len(sys.argv) < 2:
+def main(argv: Optional[list[str]] = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if not arguments:
         print("Usage: python -m modules.orchestrator.file_indexer [index|search|stats] [args]")
-        sys.exit(0)
-
-    cmd = sys.argv[1]
-
-    if cmd == "index":
-        root = sys.argv[2] if len(sys.argv) > 2 else str(_PROJECT_ROOT / "_data" / "memory")
+        return 0
+    command = arguments[0]
+    if command == "index":
+        root = arguments[1] if len(arguments) > 1 else str(_PROJECT_ROOT / "_data" / "memory")
         result = index_directory(root=root)
         print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0 if result.get("success") else 1
+    if command == "search":
+        query = arguments[1] if len(arguments) > 1 else ""
+        print(json.dumps(search_files(query=query), indent=2, ensure_ascii=False))
+        return 0
+    if command == "stats":
+        print(json.dumps(get_index_stats(), indent=2, ensure_ascii=False))
+        return 0
+    print(f"Unknown command: {command}")
+    return 1
 
-    elif cmd == "search":
-        query = sys.argv[2] if len(sys.argv) > 2 else ""
-        results = search_files(query=query, top_k=5)
-        print(json.dumps(results, indent=2, ensure_ascii=False))
 
-    elif cmd == "stats":
-        stats = get_index_stats()
-        print(json.dumps(stats, indent=2, ensure_ascii=False))
-
-    else:
-        print(f"Unknown command: {cmd}")
+if __name__ == "__main__":
+    raise SystemExit(main())

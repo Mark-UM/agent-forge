@@ -1,73 +1,49 @@
-"""modules.search.service — Unified Search Service layer (Phase B).
+"""Unified Search Service with truthful success and provider telemetry.
 
-This is the single entry point that MCP, CLI, and /search Command all call.
-It delegates to the existing SearchPipeline in pipeline.py — it is a thin
-wrapper that provides:
-
-    1. Consistent input/output contract (SearchServiceRequest → SearchServiceResult)
-    2. Default wiring (provider registry, cache, planner, verifier)
-    3. Health check endpoint for the Capability Registry
-    4. Degraded mode tracking (no silent failures)
-
-Architecture:
-
-    Search MCP   ─┐
-    Search CLI   ─┼─→  SearchService.search()  ─→  SearchPipeline.execute()
-    /search      ─┘            │
-                                ├─ ProviderRegistry (default or injected)
-                                ├─ Cache (on-disk JSON)
-                                ├─ Planner (real or stub)
-                                └─ Verifier (real or stub)
-
-The Service does NOT implement search logic itself — it wires dependencies
-and delegates to SearchPipeline. This keeps the pipeline testable in isolation
-while giving callers a single, consistent entry point.
+MCP, CLI, and command adapters use this service. Pipeline completion is not
+reported as success unless usable search results exist. Production cache
+callbacks are supplied by :mod:`modules.search.factory` and backed by SQLite;
+this module no longer writes legacy JSON cache files.
 """
 from __future__ import annotations
 
-import json
-import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-# Bootstrap project root
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from modules.common.result import OperationResult, StepStatus
-from modules.common.run import EventType, RunRecorder, RunResult, RunStatus
-from modules.search.contracts import (
-    SearchMode, SearchPipelineResult, SearchRequest, SearchResult,
-    VerificationReport, VerificationStatus,
+from modules.common.run import EventType, RunRecorder, RunResult
+from modules.search.cache_store import DEFAULT_DB_PATH
+from modules.search.contracts import SearchMode, SearchRequest, SearchResult
+from modules.search.hardened_pipeline import (
+    HardenedSearchPipeline,
+    serialize_provider_execution,
 )
-from modules.search.pipeline import SearchPipeline, DEFAULT_CACHE_TTL_SECONDS
-from modules.search.providers import (
-    ProviderRegistry, default_registry,
+from modules.search.pipeline import DEFAULT_CACHE_TTL_SECONDS
+from modules.search.provider_policy import (
+    ProviderOutcome,
+    ProviderState,
+    provider_state,
 )
+from modules.search.providers import ProviderRegistry, default_registry
 
 try:
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
 
-# ── Service-level request/result contracts ──────────────────
-
 @dataclass(frozen=True)
 class SearchServiceRequest:
-    """Normalized request accepted by SearchService.search().
-
-    This is a simpler contract than SearchRequest — the Service handles
-    enum conversion and validation internally.
-    """
     query: str
-    mode: str = 'standard'           # quick|standard|deep|academic
-    language: str = 'auto'
+    mode: str = "standard"
+    language: str = "auto"
     max_sub_queries: int = 5
     verify: bool = True
     no_cache: bool = False
@@ -75,98 +51,67 @@ class SearchServiceRequest:
 
 @dataclass(frozen=True)
 class SearchServiceResult:
-    """Normalized result returned by SearchService.search().
-
-    Wraps the SearchPipelineResult with service-level metadata. The optional
-    `run` field carries a RunResult (Phase C Run/Step/Event model) when
-    `record_run=True` is passed to search().
-    """
     success: bool
     query: str
     mode: str
-    result: Optional[dict] = None       # serialized SearchPipelineResult
+    result: Optional[dict] = None
     error: Optional[str] = None
     degraded_mode: bool = False
     duration_ms: int = 0
-    timestamp: str = ''
-    run: Optional[RunResult] = None     # Phase C: Run/Step/Event telemetry
+    timestamp: str = ""
+    run: Optional[RunResult] = None
+    output_usable: bool = False
+    execution_status: str = "failed"
+    provider_attempts: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            'success': self.success,
-            'query': self.query,
-            'mode': self.mode,
-            'result': self.result,
-            'error': self.error,
-            'degraded_mode': self.degraded_mode,
-            'duration_ms': self.duration_ms,
-            'timestamp': self.timestamp,
-            'run': self.run.to_dict() if self.run else None,
+            "success": self.success,
+            "output_usable": self.output_usable,
+            "execution_status": self.execution_status,
+            "query": self.query,
+            "mode": self.mode,
+            "result": self.result,
+            "error": self.error,
+            "degraded_mode": self.degraded_mode,
+            "provider_attempts": list(self.provider_attempts),
+            "duration_ms": self.duration_ms,
+            "timestamp": self.timestamp,
+            "run": self.run.to_dict() if self.run else None,
         }
 
 
-# ── Exceptions ──────────────────────────────────────────────
-
 class SearchServiceError(Exception):
-    """Base error for SearchService."""
+    pass
 
 
 class SearchServiceValidationError(SearchServiceError):
-    """Raised when the request is invalid (empty query, bad mode, etc.)."""
+    pass
 
 
-# ── On-disk cache (shared across all entry points) ──────────
+def _classify_execution(
+    *,
+    output_usable: bool,
+    degraded: bool,
+    attempts: list[dict],
+) -> str:
+    outcomes = {attempt.get("provider_outcome") for attempt in attempts}
+    if output_usable:
+        return "partial" if degraded or outcomes - {ProviderOutcome.SUCCESS.value} else "succeeded"
+    if ProviderOutcome.FAILED.value in outcomes and not (
+        ProviderOutcome.NO_RESULTS.value in outcomes
+    ):
+        return "failed"
+    return "no_results"
 
-_CACHE_FILE = _PROJECT_ROOT / '_runtime' / 'search' / 'pipeline_cache.json'
-
-
-def _load_cache() -> dict[str, Any]:
-    """Load the on-disk cache. Returns empty dict if missing or corrupt."""
-    if not _CACHE_FILE.exists():
-        return {}
-    try:
-        with open(_CACHE_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _save_cache(cache: dict[str, Any]) -> None:
-    """Save cache to disk atomically. Non-fatal on failure."""
-    try:
-        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _CACHE_FILE.with_suffix('.json.tmp')
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, _CACHE_FILE)
-    except OSError:
-        pass
-
-
-def _cache_get(key: str) -> Optional[dict]:
-    return _load_cache().get(key)
-
-
-def _cache_store(key: str, entry: dict) -> None:
-    cache = _load_cache()
-    cache[key] = entry
-    _save_cache(cache)
-
-
-# ── SearchService ───────────────────────────────────────────
 
 class SearchService:
-    """Unified Search Service — single entry point for MCP, CLI, and /search.
+    """Single production seam for Search execution.
 
-    All three entry points (Search MCP server, Search CLI, /search Markdown
-    command) call `service.search()` with a SearchServiceRequest. The Service
-    builds the internal SearchRequest, wires dependencies (provider registry,
-    cache, planner, verifier), runs the SearchPipeline, and returns a
-    normalized SearchServiceResult.
-
-    The Service does NOT contain search logic — it is a dependency wiring
-    layer that delegates to SearchPipeline.
+    Direct construction is intentionally cache-neutral. The canonical factory
+    supplies SQLite callbacks; tests and specialised callers may inject custom
+    callbacks. This avoids recreating a hidden JSON state source whenever a
+    service is instantiated outside the factory.
     """
 
     def __init__(
@@ -179,95 +124,68 @@ class SearchService:
         cache_store_fn: Optional[Callable[[str, dict], None]] = None,
         cache_ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS,
     ) -> None:
-        """Initialize the SearchService.
-
-        Args:
-            registry: ProviderRegistry. If None, built on each search() call
-                      via default_registry().
-            planner_fn: Sub-query planner. If None, pipeline uses a stub.
-            verify_fn: Verifier. If None, verification is skipped.
-            cache_get_fn: Cache read function. If None, on-disk JSON cache.
-            cache_store_fn: Cache write function. If None, on-disk JSON cache.
-            cache_ttl_seconds: Cache freshness TTL. Default 24h.
-        """
         self._registry = registry
         self._planner_fn = planner_fn
         self._verify_fn = verify_fn
-        self._cache_get_fn = cache_get_fn or _cache_get
-        self._cache_store_fn = cache_store_fn or _cache_store
+        self._cache_get_fn = cache_get_fn
+        self._cache_store_fn = cache_store_fn
         self._cache_ttl = cache_ttl_seconds
+        self._cache_repository = None
 
-    # ── Public API ──────────────────────────────────────────
-
-    def search(self, request: SearchServiceRequest,
-               *, record_run: bool = False) -> SearchServiceResult:
-        """Execute a search. This is the single unified entry point.
-
-        Args:
-            request: SearchServiceRequest with query, mode, etc.
-            record_run: If True, record a Run/Step/Event RunResult (Phase C)
-                and attach it to the returned SearchServiceResult.run field.
-                Default False to avoid overhead when telemetry is not needed.
-
-        Returns:
-            SearchServiceResult with serialized pipeline result or error.
-
-        Raises:
-            SearchServiceValidationError: If the request is invalid.
-        """
-        start = time.monotonic()
+    def search(
+        self,
+        request: SearchServiceRequest,
+        *,
+        record_run: bool = False,
+    ) -> SearchServiceResult:
+        started = time.monotonic()
         timestamp = datetime.now(timezone.utc).isoformat()
-
-        # Validate request
+        if not isinstance(request, SearchServiceRequest):
+            raise SearchServiceValidationError("request must be SearchServiceRequest")
         if not request.query or not request.query.strip():
             raise SearchServiceValidationError("query must not be empty")
+        if request.max_sub_queries < 1:
+            raise SearchServiceValidationError("max_sub_queries must be at least 1")
 
         query = request.query.strip()
-
-        # Build mode enum
         try:
-            mode_enum = SearchMode(request.mode)
-        except ValueError:
+            mode = SearchMode(request.mode)
+        except ValueError as exc:
             raise SearchServiceValidationError(
-                f"Invalid mode: {request.mode!r}. "
-                f"Valid: {[m.value for m in SearchMode]}"
-            )
+                f"invalid mode {request.mode!r}; valid modes: {[item.value for item in SearchMode]}"
+            ) from exc
 
-        # Build provider registry
         registry = self._registry or self._build_default_registry()
-
-        # Build internal SearchRequest
         internal_request = SearchRequest(
             query=query,
-            mode=mode_enum,
+            mode=mode,
             language=request.language,
             max_sub_queries=request.max_sub_queries,
             verify=request.verify,
         )
-
-        # Determine cache functions
         cache_get = None if request.no_cache else self._cache_get_fn
         cache_store = None if request.no_cache else self._cache_store_fn
 
-        # Optional Run/Step/Event recording (Phase C)
         recorder: Optional[RunRecorder] = None
         if record_run:
             recorder = RunRecorder(
-                run_type='search',
+                run_type="search",
                 metadata={
-                    'query': query, 'mode': request.mode,
-                    'language': request.language,
-                    'no_cache': request.no_cache,
+                    "query": query,
+                    "mode": request.mode,
+                    "language": request.language,
+                    "no_cache": request.no_cache,
                 },
             )
             recorder.__enter__()
             if request.no_cache:
-                recorder.event(EventType.CACHE_MISS,
-                               payload={'reason': 'no_cache flag set'})
+                recorder.event(
+                    EventType.CACHE_MISS,
+                    payload={"reason": "no_cache flag set"},
+                )
 
-        # Run pipeline
         try:
-            pipeline = SearchPipeline(
+            pipeline = HardenedSearchPipeline(
                 internal_request,
                 registry=registry,
                 planner_fn=self._planner_fn,
@@ -277,168 +195,191 @@ class SearchService:
                 cache_ttl_seconds=self._cache_ttl,
             )
             pipeline_result = pipeline.execute()
-            duration_ms = int((time.monotonic() - start) * 1000)
+            attempts = [
+                serialize_provider_execution(execution)
+                for execution in pipeline_result.provider_executions
+            ]
+            output_usable = bool(pipeline_result.results)
+            degraded = pipeline_result.degraded_mode or any(
+                attempt.get("provider_outcome") != ProviderOutcome.SUCCESS.value
+                for attempt in attempts
+            )
+            execution_status = _classify_execution(
+                output_usable=output_usable,
+                degraded=degraded,
+                attempts=attempts,
+            )
+            serialized = pipeline_result.to_dict()
+            serialized["provider_executions"] = attempts
+            serialized["success"] = output_usable
+            serialized["output_usable"] = output_usable
+            serialized["execution_status"] = execution_status
 
-            # If recording, surface pipeline step_reports as Run steps
             run_result: Optional[RunResult] = None
             if recorder is not None:
-                for name, op_result in pipeline_result.step_reports.items():
-                    recorder.add_step_result(name, op_result)
-                if pipeline_result.degraded_mode:
-                    recorder.event(EventType.DEGRADED_ENTERED,
-                                   level='warn',
-                                   payload={'mode': request.mode})
-                run_result = recorder.result if recorder._result is None else recorder._result
-                if recorder._run.ended_at is None:
-                    recorder.__exit__(None, None, None)
-                    run_result = recorder.result
+                for name, operation in pipeline_result.step_reports.items():
+                    recorder.add_step_result(name, operation)
+                if degraded:
+                    recorder.event(
+                        EventType.DEGRADED_ENTERED,
+                        level="warn",
+                        payload={"mode": request.mode},
+                    )
+                recorder.__exit__(None, None, None)
+                run_result = recorder.result
 
+            error = None
+            if not output_usable:
+                error = (
+                    "all search providers failed"
+                    if execution_status == "failed"
+                    else "search completed without usable results"
+                )
             return SearchServiceResult(
-                success=True,
+                success=output_usable,
+                output_usable=output_usable,
+                execution_status=execution_status,
                 query=query,
                 mode=request.mode,
-                result=pipeline_result.to_dict(),
-                degraded_mode=pipeline_result.degraded_mode,
-                duration_ms=duration_ms,
+                result=serialized,
+                error=error,
+                degraded_mode=degraded,
+                provider_attempts=tuple(attempts),
+                duration_ms=int((time.monotonic() - started) * 1000),
                 timestamp=timestamp,
                 run=run_result,
             )
-        except Exception as e:
-            duration_ms = int((time.monotonic() - start) * 1000)
+        except Exception as exc:
+            run_result = None
             if recorder is not None:
-                recorder.__exit__(type(e), e, e.__traceback__)
+                recorder.__exit__(type(exc), exc, exc.__traceback__)
                 run_result = recorder.result
-            else:
-                run_result = None
             return SearchServiceResult(
                 success=False,
+                output_usable=False,
+                execution_status="failed",
                 query=query,
                 mode=request.mode,
-                error=str(e),
-                duration_ms=duration_ms,
+                error=str(exc),
+                duration_ms=int((time.monotonic() - started) * 1000),
                 timestamp=timestamp,
                 run=run_result,
             )
 
     def health(self) -> dict[str, Any]:
-        """Return health status for the Capability Registry.
-
-        Reports:
-        - Whether the provider registry can be built
-        - How many providers are registered
-        - Whether the cache directory is writable
-        - Whether required credentials are present
-        """
+        repository = getattr(self, "_cache_repository", None)
+        custom_cache = (
+            self._cache_get_fn is not None
+            and self._cache_store_fn is not None
+            and repository is None
+        )
+        cache_path = Path(
+            repository.db_path if repository is not None else DEFAULT_DB_PATH
+        )
         status: dict[str, Any] = {
-            'service': 'search',
-            'healthy': True,
-            'providers': [],
-            'provider_count': 0,
-            'cache_dir': str(_CACHE_FILE.parent),
-            'cache_writable': True,
-            'credentials': {},
-            'warnings': [],
+            "service": "search",
+            "healthy": True,
+            "providers": [],
+            "provider_count": 0,
+            "ready_provider_count": 0,
+            "cache_backend": (
+                "sqlite" if repository is not None else "custom" if custom_cache else "disabled"
+            ),
+            "cache_path": str(cache_path),
+            "cache_dir": str(cache_path.parent),
+            "cache_writable": True,
+            "credentials": {
+                "SERPER_API_KEY": bool(__import__("os").environ.get("SERPER_API_KEY")),
+                "SILICONFLOW_API_KEY": bool(
+                    __import__("os").environ.get("SILICONFLOW_API_KEY")
+                ),
+            },
+            "warnings": [],
         }
-
-        # Check provider registry
         try:
-            reg = self._build_default_registry()
-            names = reg.names()
-            status['providers'] = names
-            status['provider_count'] = len(names)
-        except Exception as e:
-            status['healthy'] = False
-            status['warnings'].append(f"Provider registry build failed: {e}")
+            registry = self._build_default_registry()
+            providers = []
+            for provider in registry.all():
+                state = provider_state(provider)
+                providers.append({"name": provider.name, "state": state.value})
+            status["providers"] = providers
+            status["provider_count"] = len(providers)
+            status["ready_provider_count"] = sum(
+                item["state"] == ProviderState.READY.value for item in providers
+            )
+            if not status["ready_provider_count"]:
+                status["healthy"] = False
+                status["warnings"].append("no search provider is ready")
+        except Exception as exc:
+            status["healthy"] = False
+            status["warnings"].append(f"provider registry build failed: {exc}")
 
-        # Check cache directory
-        try:
-            _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            test_file = _CACHE_FILE.parent / '.health_check'
-            test_file.write_text('ok')
-            test_file.unlink()
-        except OSError:
-            status['cache_writable'] = False
-            status['warnings'].append("Cache directory is not writable")
-
-        # Check credentials
-        status['credentials'] = {
-            'SERPER_API_KEY': bool(os.environ.get('SERPER_API_KEY')),
-            'SILICONFLOW_API_KEY': bool(os.environ.get('SILICONFLOW_API_KEY')),
-        }
-
+        if repository is not None:
+            try:
+                repository.count()
+            except Exception as exc:
+                status["cache_writable"] = False
+                status["healthy"] = False
+                status["warnings"].append(f"sqlite cache unavailable: {exc}")
+        elif not custom_cache:
+            status["warnings"].append(
+                "cache disabled; use modules.search.factory for production wiring"
+            )
         return status
 
     def capabilities(self) -> list[str]:
-        """Return the list of capabilities this service provides."""
         return [
-            'search.pipeline',
-            'search.provider.serper',
-            'search.provider.searxng',
-            'search.provider.arxiv',
-            'search.provider.semantic_scholar',
-            'search.provider.local_semantic',
-            'search.provider.fetch',
+            "search.pipeline",
+            "search.provider.serper",
+            "search.provider.searxng",
+            "search.provider.arxiv",
+            "search.provider.semantic_scholar",
+            "search.provider.local_semantic",
+            "search.provider.fetch",
         ]
 
-    # ── Internal helpers ────────────────────────────────────
-
     def _build_default_registry(self) -> ProviderRegistry:
-        """Build the default provider registry based on environment.
-
-        Serper is registered only if SERPER_API_KEY is set. Others are
-        always registered but return [] if their backend is unavailable.
-        """
         return default_registry(include_credentials_required=False)
 
-
-# ── Module-level singleton ──────────────────────────────────
 
 _service_singleton: Optional[SearchService] = None
 
 
 def get_search_service() -> SearchService:
-    """Return the module-level SearchService singleton.
+    """Return the canonical production service without changing package layout."""
 
-    On first call, creates a service with default wiring (on-disk cache,
-    default provider registry). Subsequent calls return the cached instance.
-    """
     global _service_singleton
     if _service_singleton is None:
-        _service_singleton = SearchService()
+        # Lazy import avoids the factory -> service import cycle during module
+        # initialization and preserves legacy tests that import search.py and
+        # orchestrator.py as top-level modules from modules/search.
+        from modules.search.factory import build_search_service
+
+        _service_singleton = build_search_service()
     return _service_singleton
 
 
 def reset_search_service() -> None:
-    """Reset the singleton. Primarily for testing."""
     global _service_singleton
     _service_singleton = None
 
 
-# ── Convenience function ────────────────────────────────────
-
 def search(
     query: str,
     *,
-    mode: str = 'standard',
-    language: str = 'auto',
+    mode: str = "standard",
+    language: str = "auto",
     max_sub_queries: int = 5,
     verify: bool = True,
     no_cache: bool = False,
 ) -> SearchServiceResult:
-    """One-shot search convenience function.
-
-    Uses the singleton SearchService. Equivalent to:
-
-        service = get_search_service()
-        result = service.search(SearchServiceRequest(query=query, mode=mode, ...))
-    """
-    service = get_search_service()
-    request = SearchServiceRequest(
-        query=query,
-        mode=mode,
-        language=language,
-        max_sub_queries=max_sub_queries,
-        verify=verify,
-        no_cache=no_cache,
+    return get_search_service().search(
+        SearchServiceRequest(
+            query=query,
+            mode=mode,
+            language=language,
+            max_sub_queries=max_sub_queries,
+            verify=verify,
+            no_cache=no_cache,
+        )
     )
-    return service.search(request)

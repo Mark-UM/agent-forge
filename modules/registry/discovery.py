@@ -1,14 +1,18 @@
-"""R2-B.1: Discovery — scan modules/*/manifest.json and load manifests.
+"""Capability manifest discovery with lossless error reporting.
 
-Handles legacy manifest schemas (module/entry_point/components) by normalizing
-them through validate_manifest(). Modules without manifest.json are skipped
-silently — they can be registered manually or added later.
+``discover_modules`` preserves the legacy list-returning API.  The canonical
+``discover_modules_report`` API also returns every parse/validation/missing
+manifest issue so validation can never pass merely because a bad manifest was
+silently skipped.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
-import os
 from pathlib import Path
+import re
+import shlex
+import sys
 from typing import Optional
 
 from modules.registry.schema import (
@@ -17,97 +21,361 @@ from modules.registry.schema import (
     validate_manifest,
 )
 
-# Project root (3 levels up from this file)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MODULES_DIR = _PROJECT_ROOT / "modules"
+_CANONICAL_FIELDS = frozenset(
+    {
+        "name",
+        "version",
+        "description",
+        "entrypoints",
+        "capabilities",
+        "dependencies",
+        "credentials",
+        "health_checks",
+        "storage",
+        "experimental",
+    }
+)
+_SKIP_DIRECTORIES = frozenset({"tests", "__pycache__"})
 
 
-def discover_modules(modules_dir: Optional[Path] = None) -> list[CapabilityManifest]:
-    """Scan modules/*/manifest.json and return validated manifests.
+@dataclass(frozen=True)
+class DiscoveryIssue:
+    module: str
+    code: str
+    message: str
+    path: str
+    severity: str = "error"
 
-    Args:
-        modules_dir: Override the modules directory. Defaults to <project>/modules.
+    def to_dict(self) -> dict:
+        return {
+            "module": self.module,
+            "code": self.code,
+            "message": self.message,
+            "path": self.path,
+            "severity": self.severity,
+        }
 
-    Returns:
-        list[CapabilityManifest]: All valid manifests found, sorted by name.
 
-    Notes:
-        - Invalid manifests are skipped (with a warning to stderr).
-        - Modules without manifest.json are skipped silently.
-        - Recovery manifests in _runtime/ are never scanned.
-    """
-    scan_dir = modules_dir or _MODULES_DIR
+@dataclass
+class DiscoveryReport:
+    manifests: list[CapabilityManifest] = field(default_factory=list)
+    errors: list[DiscoveryIssue] = field(default_factory=list)
+    warnings: list[DiscoveryIssue] = field(default_factory=list)
+    scanned_modules: list[str] = field(default_factory=list)
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors
+
+    def to_dict(self) -> dict:
+        return {
+            "valid": self.valid,
+            "scanned_modules": list(self.scanned_modules),
+            "valid_manifest_count": len(self.manifests),
+            "errors": [issue.to_dict() for issue in self.errors],
+            "warnings": [issue.to_dict() for issue in self.warnings],
+        }
+
+
+def _is_module_directory(path: Path) -> bool:
+    if not path.is_dir() or path.name.startswith((".", "_")):
+        return False
+    return path.name not in _SKIP_DIRECTORIES
+
+
+def _has_first_party_code(path: Path) -> bool:
+    return any(
+        candidate.is_file()
+        for candidate in path.rglob("*.py")
+        if "__pycache__" not in candidate.parts
+    )
+
+
+def _entrypoint_issue(command: str, project_root: Path) -> str | None:
+    """Return an error when a first-party Python entrypoint does not exist."""
+
+    try:
+        parts = shlex.split(command, posix=True)
+    except ValueError:
+        return "entrypoint command cannot be parsed"
+    if len(parts) >= 3 and parts[0].lower().startswith("python") and parts[1] == "-m":
+        module_name = parts[2]
+        if not module_name.startswith("modules."):
+            return None
+        candidate = project_root.joinpath(*module_name.split("."))
+        if candidate.with_suffix(".py").is_file() or (candidate / "__init__.py").is_file():
+            return None
+        return f"Python module does not exist: {module_name}"
+    if len(parts) >= 2 and parts[0].lower().startswith("python"):
+        script = parts[1].replace("\\", "/")
+        if script.startswith("modules/") and not (project_root / script).is_file():
+            return f"Python script does not exist: {script}"
+    return None
+
+
+def _strict_issues(
+    *,
+    raw: dict,
+    manifest: CapabilityManifest,
+    module_dir: Path,
+    project_root: Path,
+) -> list[DiscoveryIssue]:
+    issues: list[DiscoveryIssue] = []
+    path = str(module_dir / "manifest.json")
+    missing = sorted(_CANONICAL_FIELDS - set(raw))
+    if missing:
+        issues.append(
+            DiscoveryIssue(
+                module=module_dir.name,
+                code="missing_canonical_fields",
+                message=f"missing canonical fields: {', '.join(missing)}",
+                path=path,
+            )
+        )
+    legacy = sorted(set(raw) & {"module", "entry_point", "components"})
+    if legacy:
+        issues.append(
+            DiscoveryIssue(
+                module=module_dir.name,
+                code="legacy_manifest_fields",
+                message=f"legacy fields are not allowed in strict mode: {', '.join(legacy)}",
+                path=path,
+            )
+        )
+    if manifest.name != module_dir.name:
+        issues.append(
+            DiscoveryIssue(
+                module=module_dir.name,
+                code="module_name_mismatch",
+                message=f"manifest name {manifest.name!r} does not match directory {module_dir.name!r}",
+                path=path,
+            )
+        )
+
+    for kind, entrypoint in manifest.entrypoints.items():
+        problem = _entrypoint_issue(entrypoint.command, project_root)
+        if problem:
+            issues.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="invalid_entrypoint",
+                    message=f"{kind}: {problem}",
+                    path=path,
+                )
+            )
+
+    for storage in manifest.storage:
+        if not storage.path:
+            if storage.type != "none":
+                issues.append(
+                    DiscoveryIssue(
+                        module=module_dir.name,
+                        code="empty_storage_path",
+                        message=f"storage type {storage.type!r} requires a path",
+                        path=path,
+                    )
+                )
+            continue
+        storage_path = Path(storage.path)
+        if storage_path.is_absolute():
+            issues.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="absolute_storage_path",
+                    message=f"storage path must be project-relative: {storage.path}",
+                    path=path,
+                )
+            )
+            continue
+        resolved = (project_root / storage_path).resolve()
+        try:
+            resolved.relative_to(project_root.resolve())
+        except ValueError:
+            issues.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="storage_path_escape",
+                    message=f"storage path escapes the project root: {storage.path}",
+                    path=path,
+                )
+            )
+
+    seen: set[str] = set()
+    for capability in manifest.capabilities:
+        if not capability.name or not re.match(r"^[a-z][a-z0-9_.-]*$", capability.name):
+            issues.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="invalid_capability_name",
+                    message=f"invalid capability name: {capability.name!r}",
+                    path=path,
+                )
+            )
+        if capability.name in seen:
+            issues.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="duplicate_capability",
+                    message=f"capability is declared more than once: {capability.name}",
+                    path=path,
+                )
+            )
+        seen.add(capability.name)
+    return issues
+
+
+def discover_modules_report(
+    modules_dir: Optional[Path] = None,
+    *,
+    strict: bool = False,
+) -> DiscoveryReport:
+    scan_dir = (modules_dir or _MODULES_DIR).resolve()
+    project_root = scan_dir.parent.resolve()
+    report = DiscoveryReport()
     if not scan_dir.exists():
-        return []
+        report.errors.append(
+            DiscoveryIssue(
+                module="<registry>",
+                code="modules_directory_missing",
+                message=f"modules directory does not exist: {scan_dir}",
+                path=str(scan_dir),
+            )
+        )
+        return report
 
-    manifests: list[CapabilityManifest] = []
-    errors: list[tuple[str, str]] = []
-
-    for entry in sorted(scan_dir.iterdir()):
-        if not entry.is_dir():
+    capability_owners: dict[str, str] = {}
+    for module_dir in sorted(scan_dir.iterdir()):
+        if not _is_module_directory(module_dir):
             continue
-        # Skip non-module directories
-        if entry.name.startswith('.') or entry.name.startswith('_'):
+        if not _has_first_party_code(module_dir):
             continue
-        if entry.name in {'tests', '__pycache__'}:
-            continue
-
-        manifest_path = entry / "manifest.json"
-        if not manifest_path.exists():
+        report.scanned_modules.append(module_dir.name)
+        manifest_path = module_dir / "manifest.json"
+        if not manifest_path.is_file():
+            report.errors.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="manifest_missing",
+                    message="module contains Python code but has no manifest.json",
+                    path=str(manifest_path),
+                )
+            )
             continue
 
         try:
-            with open(manifest_path, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-            manifest = validate_manifest(raw)
-            manifests.append(manifest)
-        except json.JSONDecodeError as e:
-            errors.append((entry.name, f"JSON parse error: {e}"))
-        except ManifestValidationError as e:
-            errors.append((entry.name, str(e)))
-        except Exception as e:
-            errors.append((entry.name, f"Unexpected error: {e}"))
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            report.errors.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="manifest_json_invalid",
+                    message=str(exc),
+                    path=str(manifest_path),
+                )
+            )
+            continue
+        except OSError as exc:
+            report.errors.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="manifest_read_failed",
+                    message=str(exc),
+                    path=str(manifest_path),
+                )
+            )
+            continue
 
-    # Report errors to stderr (non-fatal)
-    if errors:
-        import sys
-        for mod_name, err in errors:
-            print(
-                f"[registry] WARNING: Skipping module {mod_name!r}: {err}",
-                file=sys.stderr,
+        try:
+            manifest = validate_manifest(raw)
+        except ManifestValidationError as exc:
+            report.errors.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="manifest_schema_invalid",
+                    message=str(exc),
+                    path=str(manifest_path),
+                )
+            )
+            continue
+        except Exception as exc:
+            report.errors.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="manifest_validation_failed",
+                    message=f"{type(exc).__name__}: {exc}",
+                    path=str(manifest_path),
+                )
+            )
+            continue
+
+        if manifest.name != module_dir.name:
+            target = report.errors if strict else report.warnings
+            target.append(
+                DiscoveryIssue(
+                    module=module_dir.name,
+                    code="module_name_mismatch",
+                    message=f"manifest name {manifest.name!r} does not match directory {module_dir.name!r}",
+                    path=str(manifest_path),
+                    severity="error" if strict else "warning",
+                )
+            )
+        if strict:
+            report.errors.extend(
+                _strict_issues(
+                    raw=raw,
+                    manifest=manifest,
+                    module_dir=module_dir,
+                    project_root=project_root,
+                )
             )
 
-    return sorted(manifests, key=lambda m: m.name)
+        for capability in manifest.capabilities:
+            owner = capability_owners.get(capability.name)
+            if capability.name and owner and owner != manifest.name:
+                report.errors.append(
+                    DiscoveryIssue(
+                        module=module_dir.name,
+                        code="capability_owner_conflict",
+                        message=f"capability {capability.name!r} is already owned by {owner!r}",
+                        path=str(manifest_path),
+                    )
+                )
+            elif capability.name:
+                capability_owners[capability.name] = manifest.name
+        report.manifests.append(manifest)
+
+    report.manifests.sort(key=lambda manifest: manifest.name)
+    return report
+
+
+def discover_modules(modules_dir: Optional[Path] = None) -> list[CapabilityManifest]:
+    report = discover_modules_report(modules_dir)
+    for issue in [*report.errors, *report.warnings]:
+        print(
+            f"[registry] {issue.severity.upper()}: {issue.module}: {issue.message}",
+            file=sys.stderr,
+        )
+    return report.manifests
 
 
 def discover_module_names(modules_dir: Optional[Path] = None) -> list[str]:
-    """Return just the names of modules with valid manifests."""
-    return [m.name for m in discover_modules(modules_dir)]
+    return [manifest.name for manifest in discover_modules(modules_dir)]
 
 
 def find_missing_manifests(modules_dir: Optional[Path] = None) -> list[str]:
-    """Return names of module directories that lack a manifest.json.
+    report = discover_modules_report(modules_dir)
+    return [
+        issue.module for issue in report.errors if issue.code == "manifest_missing"
+    ]
 
-    Useful for identifying which modules need manifests added.
-    Excludes directories that are clearly not modules (tests, __pycache__, etc.).
-    """
-    scan_dir = modules_dir or _MODULES_DIR
-    if not scan_dir.exists():
-        return []
 
-    missing: list[str] = []
-    for entry in sorted(scan_dir.iterdir()):
-        if not entry.is_dir():
-            continue
-        if entry.name.startswith('.') or entry.name.startswith('_'):
-            continue
-        if entry.name in {'tests', '__pycache__'}:
-            continue
-        # Check if directory has any .py files (is it a real module?)
-        has_python = any(entry.rglob('*.py'))
-        if not has_python:
-            continue
-        if not (entry / "manifest.json").exists():
-            missing.append(entry.name)
-
-    return missing
+__all__ = [
+    "DiscoveryIssue",
+    "DiscoveryReport",
+    "discover_module_names",
+    "discover_modules",
+    "discover_modules_report",
+    "find_missing_manifests",
+]

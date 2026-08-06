@@ -1,25 +1,50 @@
 {
   "name": "mcp",
-  "version": "1.0.0",
-  "description": "Self-hosted MCP servers (JSON-RPC 2.0 over stdio): fetch (URL to markdown), sqlite (read-only query/schema), and time (timezone conversion)",
+  "version": "1.1.1",
+  "description": "Self-hosted MCP servers with fail-closed network and database boundaries: guarded Fetch, true read-only SQLite, and timezone conversion",
   "entrypoints": {
-    "mcp": "python -m modules.mcp.fetch_mcp serve"
+    "mcp": "python -m modules.mcp.secure_fetch_mcp serve",
+    "cli": "python -m modules.mcp.secure_fetch_mcp --help"
   },
   "capabilities": [
-    {"name": "mcp.fetch", "version": "1.0", "description": "Fetch a URL and return content as markdown or raw text with HTML conversion, encoding detection, and pagination safety (fetch_mcp.py; serve via 'python -m modules.mcp.fetch_mcp serve')"},
-    {"name": "mcp.sqlite", "version": "1.0", "description": "Read-only SQLite query, list_tables, get_schema, and optional writable execute with parameterized queries (sqlite_mcp.py; serve via 'python -m modules.mcp.sqlite_mcp serve')"},
-    {"name": "mcp.time", "version": "1.0", "description": "Get current time in a timezone and convert times between timezones with DST gap/fold handling (time_mcp.py; serve via 'python -m modules.mcp.time_mcp serve')"}
+    {
+      "name": "mcp.fetch",
+      "version": "1.1",
+      "description": "Fetch public HTTP(S) content as markdown or raw text with bounded reads, DNS/IP validation, private/metadata target blocking, and redirect revalidation; serve with python -m modules.mcp.secure_fetch_mcp serve"
+    },
+    {
+      "name": "mcp.sqlite",
+      "version": "1.1",
+      "description": "SQLite query and schema inspection using URI mode=ro, PRAGMA query_only, and a deny-by-default write authorizer; serve with python -m modules.mcp.sqlite_mcp serve and require explicit writable mode for execute"
+    },
+    {
+      "name": "mcp.time",
+      "version": "1.0",
+      "description": "Get current time in a timezone and convert times between timezones with DST gap/fold handling; serve with python -m modules.mcp.time_mcp serve"
+    }
   ],
   "dependencies": {
-    "required": ["Python standard library"],
+    "required": [
+      "Python standard library",
+      "modules.common.security"
+    ],
     "optional": []
   },
   "credentials": [],
   "health_checks": [
-    {"command": "python -c \"import modules.mcp.fetch_mcp, modules.mcp.sqlite_mcp, modules.mcp.time_mcp\"", "description": "Verify all three MCP server modules import", "timeout": 30}
+    {
+      "command": "python -c \"import modules.mcp.secure_fetch_mcp, modules.mcp.sqlite_mcp, modules.mcp.time_mcp\"",
+      "description": "Verify secure Fetch, SQLite, and Time MCP server modules import",
+      "timeout": 30
+    }
   ],
   "storage": [
-    {"type": "sqlite", "path": "_runtime/mcp-sqlite.db", "tables": [], "description": "Default SQLite database for sqlite_mcp (DEFAULT_DB_PATH); created and managed by callers"}
+    {
+      "type": "sqlite",
+      "path": "_runtime/mcp-sqlite.db",
+      "tables": [],
+      "description": "Default SQLite database inspected by sqlite_mcp; read-only mode never creates or mutates the file"
+    }
   ],
   "experimental": false
 }

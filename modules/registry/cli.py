@@ -1,178 +1,195 @@
 #!/usr/bin/env python3
-"""R2-B.6: Registry CLI — list, health, and validate commands.
+"""Capability Registry CLI.
 
-Usage:
-    python -m modules.registry list [--json]
-    python -m modules.registry health [--json]
-    python -m modules.registry validate
-    python -m modules.registry missing
+Validation consumes a lossless DiscoveryReport. A malformed or missing manifest
+therefore cannot disappear from the valid-module list and accidentally produce
+a zero exit status.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import sys
-from pathlib import Path
 
 try:
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    """List all registered modules."""
-    from modules.registry.discovery import discover_modules
+    from modules.registry.discovery import discover_modules_report
     from modules.registry.schema import manifest_to_dict
 
-    manifests = discover_modules()
-
+    report = discover_modules_report(strict=False)
     if args.json:
-        output = {
-            'total': len(manifests),
-            'modules': [manifest_to_dict(m) for m in manifests],
-        }
-        print(json.dumps(output, indent=2, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "total": len(report.manifests),
+                    "modules": [manifest_to_dict(item) for item in report.manifests],
+                    "discovery": report.to_dict(),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
     else:
-        if not manifests:
-            print("No modules found.")
-            return 0
-        print(f"{'Name':<20} {'Version':<12} {'Experimental':<14} {'Capabilities'}")
-        print("-" * 80)
-        for m in manifests:
-            exp = "yes" if m.experimental else "no"
-            caps = ", ".join(c.name for c in m.capabilities) or "-"
-            print(f"{m.name:<20} {m.version:<12} {exp:<14} {caps}")
-        print(f"\nTotal: {len(manifests)} modules")
-
-    return 0
+        if report.manifests:
+            print(f"{'Name':<20} {'Version':<12} {'Experimental':<14} Capabilities")
+            print("-" * 80)
+            for manifest in report.manifests:
+                capabilities = ", ".join(
+                    capability.name for capability in manifest.capabilities
+                ) or "-"
+                print(
+                    f"{manifest.name:<20} {manifest.version:<12} "
+                    f"{('yes' if manifest.experimental else 'no'):<14} {capabilities}"
+                )
+            print(f"\nTotal: {len(report.manifests)} modules")
+        else:
+            print("No valid modules found.")
+        for issue in report.errors:
+            print(f"ERROR {issue.module}: {issue.message}", file=sys.stderr)
+        for issue in report.warnings:
+            print(f"WARN  {issue.module}: {issue.message}", file=sys.stderr)
+    return 1 if report.errors else 0
 
 
 def _cmd_health(args: argparse.Namespace) -> int:
-    """Run health checks for all modules."""
-    from modules.registry.discovery import discover_modules
-    from modules.registry.health import run_health_checks, check_credentials
+    from modules.registry.discovery import discover_modules_report
+    from modules.registry.health import check_credentials, run_health_checks
 
-    manifests = discover_modules()
-    if not manifests:
+    report = discover_modules_report(strict=False)
+    if report.errors:
+        if args.json:
+            print(json.dumps({"discovery": report.to_dict()}, indent=2, ensure_ascii=False))
+        else:
+            for issue in report.errors:
+                print(f"ERROR {issue.module}: {issue.message}", file=sys.stderr)
+        return 1
+    if not report.manifests:
         print("No modules found.")
         return 1
 
-    health_results = run_health_checks(manifests=manifests)
-
+    health_results = run_health_checks(manifests=report.manifests)
     if args.json:
         output = {
-            'total_modules': len(manifests),
-            'modules': [],
-            'summary': {
-                'healthy': sum(1 for h in health_results.values() if h.overall == 'healthy'),
-                'degraded': sum(1 for h in health_results.values() if h.overall == 'degraded'),
-                'unhealthy': sum(1 for h in health_results.values() if h.overall == 'unhealthy'),
-                'unknown': sum(1 for h in health_results.values() if h.overall == 'unknown'),
+            "total_modules": len(report.manifests),
+            "modules": [],
+            "summary": {
+                status: sum(
+                    1 for result in health_results.values() if result.overall == status
+                )
+                for status in ("healthy", "degraded", "unhealthy", "unknown")
             },
         }
-        for m in manifests:
-            health = health_results.get(m.name)
-            creds = check_credentials(m)
-            output['modules'].append({
-                'name': m.name,
-                'health': health.to_dict() if health else None,
-                'credentials': creds,
-            })
+        for manifest in report.manifests:
+            health = health_results.get(manifest.name)
+            output["modules"].append(
+                {
+                    "name": manifest.name,
+                    "health": health.to_dict() if health else None,
+                    "credentials": check_credentials(manifest),
+                }
+            )
         print(json.dumps(output, indent=2, ensure_ascii=False))
     else:
-        print(f"{'Module':<20} {'Status':<12} {'Checks':<12} {'Credentials'}")
+        print(f"{'Module':<20} {'Status':<12} {'Checks':<12} Credentials")
         print("-" * 70)
-        for m in manifests:
-            health = health_results.get(m.name)
-            if health:
-                status = health.overall
-                checks = f"{health.passed_count}/{len(health.checks)}"
-            else:
-                status = "unknown"
-                checks = "-"
-            creds = check_credentials(m)
-            cred_summary = f"{sum(1 for c in creds if c['present'])}/{len(creds)}"
-            print(f"{m.name:<20} {status:<12} {checks:<12} {cred_summary}")
+        for manifest in report.manifests:
+            health = health_results.get(manifest.name)
+            status = health.overall if health else "unknown"
+            checks = f"{health.passed_count}/{len(health.checks)}" if health else "-"
+            credentials = check_credentials(manifest)
+            present = sum(1 for credential in credentials if credential["present"])
+            print(
+                f"{manifest.name:<20} {status:<12} {checks:<12} "
+                f"{present}/{len(credentials)}"
+            )
 
-        # Summary
-        summary = {
-            'healthy': sum(1 for h in health_results.values() if h.overall == 'healthy'),
-            'degraded': sum(1 for h in health_results.values() if h.overall == 'degraded'),
-            'unhealthy': sum(1 for h in health_results.values() if h.overall == 'unhealthy'),
-            'unknown': sum(1 for h in health_results.values() if h.overall == 'unknown'),
-        }
-        print(f"\nSummary: {summary['healthy']} healthy, {summary['degraded']} degraded, "
-              f"{summary['unhealthy']} unhealthy, {summary['unknown']} unknown")
-
-    # Exit non-zero if any module is unhealthy
-    has_unhealthy = any(h.overall == 'unhealthy' for h in health_results.values())
-    return 1 if has_unhealthy else 0
+    return 1 if any(
+        result.overall == "unhealthy" for result in health_results.values()
+    ) else 0
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    """Validate all manifest.json files."""
-    from modules.registry.discovery import discover_modules, find_missing_manifests
+    from modules.registry.discovery import discover_modules_report
 
-    manifests = discover_modules()
-    missing = find_missing_manifests()
+    report = discover_modules_report(strict=args.strict)
+    if args.json:
+        output = report.to_dict()
+        output["strict"] = args.strict
+        output["modules"] = [
+            {"name": item.name, "version": item.version}
+            for item in report.manifests
+        ]
+        print(json.dumps(output, indent=2, ensure_ascii=False))
+    else:
+        mode = "strict" if args.strict else "compatible"
+        print(f"Registry validation mode: {mode}")
+        print(f"Scanned modules: {len(report.scanned_modules)}")
+        print(f"Valid manifests: {len(report.manifests)}")
+        for manifest in report.manifests:
+            print(f"  OK  {manifest.name} v{manifest.version}")
+        if report.warnings:
+            print(f"\nWarnings: {len(report.warnings)}")
+            for issue in report.warnings:
+                print(f"  WARN  {issue.module} [{issue.code}] {issue.message}")
+        if report.errors:
+            print(f"\nErrors: {len(report.errors)}")
+            for issue in report.errors:
+                print(f"  ERROR {issue.module} [{issue.code}] {issue.message}")
 
-    if not manifests and not missing:
-        print("No modules found.")
-        return 0
-
-    print(f"Valid manifests: {len(manifests)}")
-    for m in manifests:
-        print(f"  OK  {m.name} v{m.version}")
-
-    if missing:
-        print(f"\nMissing manifests: {len(missing)}")
-        for name in missing:
-            print(f"  MISSING  {name}")
-        return 1
-
-    return 0
+    return 0 if report.valid else 1
 
 
 def _cmd_missing(args: argparse.Namespace) -> int:
-    """List modules that lack manifest.json."""
-    from modules.registry.discovery import find_missing_manifests
+    from modules.registry.discovery import discover_modules_report
 
-    missing = find_missing_manifests()
+    report = discover_modules_report(strict=False)
+    missing = [
+        issue.module for issue in report.errors if issue.code == "manifest_missing"
+    ]
     if not missing:
-        print("All modules have manifests.")
+        print("All code modules have manifest.json files.")
         return 0
-
     print("Modules missing manifest.json:")
-    for name in missing:
-        print(f"  - {name}")
-    return 0
+    for module in missing:
+        print(f"  - {module}")
+    return 1
 
 
-def main(argv: list[str] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog='modules.registry',
-        description='Capability Registry — list, health, and validate module manifests.',
+        prog="modules.registry",
+        description="Capability Registry — list, health, and validate manifests.",
     )
-    sub = parser.add_subparsers(dest='command', required=True)
+    sub = parser.add_subparsers(dest="command", required=True)
 
-    p_list = sub.add_parser('list', help='List all registered modules')
-    p_list.add_argument('--json', action='store_true', help='Output as JSON')
-    p_list.set_defaults(func=_cmd_list)
+    list_parser = sub.add_parser("list", help="List registered modules")
+    list_parser.add_argument("--json", action="store_true")
+    list_parser.set_defaults(func=_cmd_list)
 
-    p_health = sub.add_parser('health', help='Run health checks for all modules')
-    p_health.add_argument('--json', action='store_true', help='Output as JSON')
-    p_health.set_defaults(func=_cmd_health)
+    health_parser = sub.add_parser("health", help="Run module health checks")
+    health_parser.add_argument("--json", action="store_true")
+    health_parser.set_defaults(func=_cmd_health)
 
-    p_validate = sub.add_parser('validate', help='Validate all manifest.json files')
-    p_validate.set_defaults(func=_cmd_validate)
+    validate_parser = sub.add_parser("validate", help="Validate all manifests")
+    validate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Require canonical fields and validate names, entrypoints, storage, and capabilities",
+    )
+    validate_parser.add_argument("--json", action="store_true")
+    validate_parser.set_defaults(func=_cmd_validate)
 
-    p_missing = sub.add_parser('missing', help='List modules without manifest.json')
-    p_missing.set_defaults(func=_cmd_missing)
+    missing_parser = sub.add_parser("missing", help="List missing manifests")
+    missing_parser.set_defaults(func=_cmd_missing)
 
     args = parser.parse_args(argv)
     return args.func(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

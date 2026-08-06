@@ -31,9 +31,8 @@ def test_parse_json_array():
     items = _parse_extraction_response(response)
     assert len(items) == 2
     assert items[0]["title"] == "Task 1"
-    # SC5: None due_at → default 7 days from now (not None)
     assert items[1]["due_at"] is not None
-    assert "T" in items[1]["due_at"]  # ISO 8601 format
+    assert "T" in items[1]["due_at"]
 
 
 def test_parse_items_wrapper():
@@ -109,8 +108,8 @@ def test_parse_skips_items_without_title():
 
     response = json.dumps([
         {"title": "Valid", "priority": "high"},
-        {"priority": "low"},  # No title
-        {"title": "", "priority": "low"},  # Empty title
+        {"priority": "low"},
+        {"title": "", "priority": "low"},
     ])
     items = _parse_extraction_response(response)
     assert len(items) == 1
@@ -169,12 +168,10 @@ def test_extract_success_with_mock(temp_db, monkeypatch):
     from modules.orchestrator.action_extractor import extract_action_items
     from modules.orchestrator import schedule_store
 
-    # Patch schedule_store DB path
     temp_db_path = Path(temp_db)
     monkeypatch.setattr(schedule_store, "_DB_PATH", temp_db_path)
     schedule_store.init_db()
 
-    # Mock API response — SC4: canonical format is {"actions": [...]}
     mock_response = json.dumps({
         "actions": [
             {"title": "完成作业", "due_at": "2026-08-01T23:59:00+08:00", "priority": "high"},
@@ -198,7 +195,6 @@ def test_extract_success_with_mock(temp_db, monkeypatch):
     assert items[0]["title"] == "完成作业"
     assert "schedule_id" in items[0]
 
-    # Verify written to DB
     all_schedules = schedule_store.list_schedules()
     assert len(all_schedules) == 2
     assert all_schedules[0]["source"] == "agent_extracted"
@@ -224,9 +220,8 @@ def test_extract_no_write_to_db(temp_db, monkeypatch):
 
     items = result["items"]
     assert len(items) == 1
-    assert "schedule_id" not in items[0]  # Not written to DB
+    assert "schedule_id" not in items[0]
 
-    # DB should be empty
     all_schedules = schedule_store.list_schedules()
     assert len(all_schedules) == 0
 
@@ -252,7 +247,6 @@ def test_extract_default_due_at(temp_db, monkeypatch):
     all_schedules = schedule_store.list_schedules()
     assert len(all_schedules) == 1
 
-    # Due_at should be ~7 days from now
     due_at = all_schedules[0]["due_at"]
     parsed_due = datetime.fromisoformat(due_at)
     expected_min = datetime.now(timezone.utc) + timedelta(days=6, hours=23)
@@ -268,7 +262,6 @@ def test_extract_from_file_success(tmp_path, monkeypatch):
     from modules.orchestrator.action_extractor import extract_from_file
     from modules.orchestrator import schedule_store
 
-    # Create test file
     test_file = tmp_path / "report.md"
     test_file.write_text("# Report\n\n- Task 1", encoding="utf-8")
 
@@ -328,7 +321,6 @@ def test_sc4_prompt_requires_json_object():
     """SC4: Extraction prompt must require JSON object output, not raw array."""
     from modules.orchestrator.action_extractor import _EXTRACTION_PROMPT
 
-    # Prompt must mention JSON object (not array) as the top-level structure
     assert "JSON 对象" in _EXTRACTION_PROMPT or "JSON object" in _EXTRACTION_PROMPT
     assert '"actions"' in _EXTRACTION_PROMPT
     assert "顶层必须是对象" in _EXTRACTION_PROMPT or "top-level" in _EXTRACTION_PROMPT.lower()
@@ -356,7 +348,7 @@ def test_sc4_parse_empty_actions_object():
     import warnings
 
     with warnings.catch_warnings():
-        warnings.simplefilter("error")  # Turn warnings into errors
+        warnings.simplefilter("error")
         items = _parse_extraction_response(json.dumps({"actions": []}))
         assert items == []
 
@@ -382,7 +374,6 @@ def test_sc5_validate_due_at_valid_iso_with_tz():
 
     utc_iso, source_tz, original, error = _validate_due_at("2026-08-01T23:59:00+08:00")
     assert error is None
-    # R2-5.1: Should be converted to UTC
     assert "+00:00" in utc_iso
     assert original == "2026-08-01T23:59:00+08:00"
 
@@ -420,16 +411,15 @@ def test_sc5_validate_due_at_empty_string_returns_default():
 
 
 def test_sc5_validate_due_at_naive_attaches_timezone():
-    """R2-5.1: Naive datetime (no tz) gets default timezone attached and converted to UTC."""
+    """R2-5.1: Naive datetime gets default timezone attached and converted to UTC."""
     from modules.orchestrator.action_extractor import _validate_due_at
     from datetime import datetime
 
     utc_iso, source_tz, original, error = _validate_due_at("2026-08-01T23:59:00")
     assert error is None
-    # R2-5.1: Should be converted to UTC with source_timezone preserved
     parsed = datetime.fromisoformat(utc_iso)
     assert parsed.tzinfo is not None
-    assert source_tz is not None  # source timezone was attached
+    assert source_tz is not None
 
 
 def test_sc5_validate_due_at_invalid_format_rejected():
@@ -464,11 +454,9 @@ def test_sc5_invalid_due_at_item_marked_with_error():
     })
     items = _parse_extraction_response(response)
     assert len(items) == 2
-    # Bad item should have validation_error and None due_at
     bad_item = next(i for i in items if i["title"] == "Bad task")
     assert "validation_error" in bad_item
     assert bad_item["due_at"] is None
-    # Good item should not have validation_error
     good_item = next(i for i in items if i["title"] == "Good task")
     assert "validation_error" not in good_item
 
@@ -494,8 +482,6 @@ def test_sc6_resolve_model_fallback_on_import_error():
     """SC6: Falls back to deepseek-chat if dispatch guard unavailable."""
     from modules.orchestrator import action_extractor
 
-    # Simulate ImportError for modules.dispatch.guard
-    original_call_api = action_extractor._resolve_model.__code__
     with patch.dict("sys.modules", {"modules.dispatch.guard": None, "modules.dispatch": None}):
         with patch("builtins.__import__", side_effect=ImportError("no guard")):
             model = action_extractor._resolve_model()
@@ -511,7 +497,7 @@ def test_sc6_action_extraction_in_flash_allowlist():
 
 
 def test_sc6_call_api_uses_resolved_model(temp_db, monkeypatch):
-    """SC6: _call_api should use _resolve_model() instead of hardcoding Flash."""
+    """SC6: _call_api sends the supported model selected by _resolve_model()."""
     from modules.orchestrator import action_extractor
     from modules.orchestrator import schedule_store
 
@@ -521,13 +507,11 @@ def test_sc6_call_api_uses_resolved_model(temp_db, monkeypatch):
     captured_model = {"value": None}
 
     def fake_resolve():
-        captured_model["value"] = "test-model-123"
-        return "test-model-123"
+        captured_model["value"] = "deepseek-chat"
+        return "deepseek-chat"
 
-    # Patch _resolve_model and the API call itself
     with patch.object(action_extractor, "_resolve_model", side_effect=fake_resolve):
         with patch.object(action_extractor, "_redact_pii", return_value="content"):
-            # Capture the payload sent to urllib.request.Request
             captured_payload = {"value": None}
 
             class FakeRequest:
@@ -550,8 +534,8 @@ def test_sc6_call_api_uses_resolved_model(temp_db, monkeypatch):
                 with patch("urllib.request.urlopen", return_value=FakeResponse()):
                     action_extractor._call_api("content", "fake-key")
 
-    assert captured_model["value"] == "test-model-123"
-    assert captured_payload["value"]["model"] == "test-model-123"
+    assert captured_model["value"] == "deepseek-chat"
+    assert captured_payload["value"]["model"] == "deepseek-chat"
 
 
 # ── Fixture ────────────────────────────────────────────────────

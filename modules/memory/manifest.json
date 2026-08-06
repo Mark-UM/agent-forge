@@ -1,16 +1,75 @@
 {
-  "module": "memory",
-  "version": "1.1.0",
-  "entry_point": "modules.memory.hook",
-  "description": "Explicit atomic lesson/decision writes, structural health checks, and read-only open-action review for private local memory",
-  "dependencies": ["Python standard library"],
-  "writes": [
-    "_data/memory/lessons.md",
-    "_data/memory/decisions.md",
-    "_runtime/memory/adr_counter.txt",
-    "_runtime/memory/locks/*.lock",
-    "_runtime/reports/memory-review-*.md"
+  "name": "memory",
+  "version": "1.3.0",
+  "description": "Explicit private local memory with atomic lessons and decisions, structural review, and an approval-gated durable candidate queue",
+  "entrypoints": {
+    "cli": "python -m modules.memory.cli health",
+    "python": "python -m modules.memory.cli"
+  },
+  "capabilities": [
+    {
+      "name": "memory.lesson_write",
+      "version": "1.1",
+      "description": "Append explicit lessons atomically to private local memory"
+    },
+    {
+      "name": "memory.decision_write",
+      "version": "1.1",
+      "description": "Allocate stable ADR identifiers and append explicit decisions atomically"
+    },
+    {
+      "name": "memory.health",
+      "version": "1.0",
+      "description": "Check expected private memory files and structural invariants without exposing content"
+    },
+    {
+      "name": "memory.review",
+      "version": "1.0",
+      "description": "Produce a read-only review of explicitly marked open actions"
+    },
+    {
+      "name": "memory.candidates",
+      "version": "1.0",
+      "description": "Add, list, approve, reject and expire candidate memories; durable Markdown is written only after explicit approval"
+    }
   ],
-  "activation": "Explicit library calls or `python -m modules.memory.hook health|review`; no automatic conversation capture or hook registration",
-  "recovery": "ADR allocation reconciles a missing ignored counter against existing decisions before issuing the next ID"
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": []
+  },
+  "credentials": [],
+  "health_checks": [
+    {
+      "command": "python -m modules.memory.cli health",
+      "description": "Verify private memory structure and ADR counter consistency",
+      "timeout": 30
+    }
+  ],
+  "storage": [
+    {
+      "type": "markdown",
+      "path": "_data/memory",
+      "tables": [],
+      "description": "Private lessons, decisions, preferences and explicitly approved candidate memory"
+    },
+    {
+      "type": "sqlite",
+      "path": "_runtime/mcp-sqlite.db",
+      "tables": ["memory_candidates"],
+      "description": "Pending, approved, rejected and expired memory candidate state"
+    },
+    {
+      "type": "json",
+      "path": "_runtime/memory",
+      "tables": [],
+      "description": "ADR allocation counter and lock state"
+    },
+    {
+      "type": "markdown",
+      "path": "_runtime/reports",
+      "tables": [],
+      "description": "Explicit memory review reports"
+    }
+  ],
+  "experimental": false
 }
