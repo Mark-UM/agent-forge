@@ -5,9 +5,9 @@ OpenCode. It provides one practical execution layer for prompting, model
 routing, search, browser collection, PDF/image understanding, local scheduling,
 private memory, delivery checks, and GitHub-oriented development work.
 
-The project is currently finishing the **pre-2.0 foundation**. The next product
-version will introduce a small Multi-Agent Kernel; it will not replace the
-working single-Agent capabilities described here.
+The **pre-2.0 Windows-first foundation is complete**. Development is now
+entering the 2.0 Lightweight Multi-Agent Kernel; the new kernel will reuse
+rather than replace the working single-Agent capabilities described here.
 
 ## What is implemented
 

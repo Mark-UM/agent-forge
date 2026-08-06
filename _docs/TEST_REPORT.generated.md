@@ -1,7 +1,7 @@
 # Agent Forge Test Report
 
-This tracked document records the validation contract and the last finalized
-source baseline. The authoritative report for the current branch head is
+This tracked document records the validation contract and the finalized pre-2.0
+foundation code baseline. The authoritative report for the current branch head is
 rendered from pytest JUnit XML inside GitHub Actions and uploaded with the
 workflow artifacts as Markdown, JSON, and XML.
 
@@ -9,27 +9,31 @@ A Git commit cannot contain its own final hash without becoming
 self-referential. For that reason this file does not pretend to be the live
 report for the commit that edits it.
 
-## Last finalized source baseline
+## Finalized pre-2.0 foundation code baseline
 
 | Field | Value |
 |---|---|
-| Source commit | `c0bd6ba1e2fac66acea226f39644df4d97e8698a` |
-| GitHub Actions run | `30989584832` |
+| Foundation code commit | `b0d32fe114f1880646ece528ab1150e3070da6f5` |
+| GitHub Actions run | `31066789367` |
 | Platform | `windows-latest`, Python 3.11 |
-| Tests | 2521 |
-| Passed | 2518 |
+| Tests | 2522 |
+| Passed | 2519 |
 | Failed assertions | 0 |
 | Errors | 0 |
 | Skipped | 3 |
-| Pytest duration | 34.747 seconds |
+| Pytest duration | 123.643 seconds |
 | Fast Windows contracts | Passed |
 | Strict Registry validation | Passed |
 | Model Gateway no-bypass check | Passed |
 | Gateway contracts | Passed |
 | Capability contracts | Passed |
+| Clean Vendor/Chromium/Supervisor smoke | Passed |
 
-This baseline validated the complete source integration before the final
-release-document and clean-runtime-smoke additions.
+This is the finalized foundation code baseline. Later docs-only commits do not
+change it: their authoritative validation comes from the GitHub Artifact
+generated for their own exact head SHA. A Git commit cannot stably record its
+own final SHA, so this tracked report does not self-reference the commit that
+edits it.
 
 ## Current authoritative artifacts
 
@@ -49,8 +53,8 @@ The reports contain:
 - tests, passed, failed, errors, skipped, and duration;
 - a machine-readable success flag.
 
-They are uploaded under the `windows-pytest-results` artifact. Supervisor logs
-from the clean Windows runtime smoke are uploaded separately.
+They are uploaded under the `exact-windows-test-results` artifact. Supervisor
+logs from the clean Windows runtime smoke are uploaded separately.
 
 ## Release gate
 

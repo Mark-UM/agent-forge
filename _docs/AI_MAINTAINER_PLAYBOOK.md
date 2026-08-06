@@ -8,10 +8,14 @@ URLs, raw prompts, or unverified guesses.
 ## Current maintenance context
 
 - Repository: `Mark-UM/agent-forge`
-- Active hardening branch: `agent/full-system-hardening`
-- Active review: Draft PR `#1`
-- Primary supported environment for the current release train: Windows with
-  Python 3.11
+- Stable foundation branch: `main`
+- Finalized foundation code baseline:
+  `b0d32fe114f1880646ece528ab1150e3070da6f5`
+- Week 0 PR: `#1`, merged by Squash Merge on 2026-08-06
+- There is no active hardening branch. New work starts from current `main` on a
+  new `agent/*` branch.
+- Current development target: 2.0 Lightweight Multi-Agent Kernel.
+- Primary supported release environment: Windows with Python 3.11.
 - `main` remains protected from direct maintenance changes; all work stays on a
   branch until the latest Windows checks pass.
 
@@ -35,17 +39,19 @@ lessons below should remain stable.
 
 ## Reliable GitHub maintenance workflow
 
-1. Read the current PR head and changed-file list before editing.
-2. Inspect the latest failing Windows job logs and identify the exact failing
-   assertion or runtime boundary.
+1. Start every task from the latest `main` on a new `agent/*` branch; do not
+   develop directly on `main`.
+2. Read the current PR head and changed-file list before editing. When a check
+   fails, inspect its exact Windows job logs and identify the failing assertion
+   or runtime boundary.
 3. Change the smallest coherent production seam; update tests when the test is
    stale or asserts the wrong contract.
-4. Commit only to the active hardening branch.
-5. Let GitHub Actions validate the exact new head. A previously green commit is
+4. Let GitHub Actions validate the exact new head. A previously green commit is
    not evidence for the current head.
-6. Keep the PR in Draft until all required Windows jobs pass.
-7. After a green release candidate, synchronize README, architecture, roadmap,
-   and the generated test report with the tested commit SHA.
+5. Keep the PR in Draft until all required Windows jobs pass.
+6. After merge, verify the `main` push workflows for the new merge commit.
+7. Documentation reports record a finalized code baseline; current authoritative
+   values come from the CI Artifact for the exact head under validation.
 
 ## Windows verification order
 
@@ -140,21 +146,39 @@ green only after the complete locked Vendor install, Chromium install, and
 authenticated Supervisor service lifecycle has actually passed, including
 process cleanup.
 
+### Rebuild Windows Vendor only after owned services stop
+
+Windows cannot replace a loaded `.pyd` file. Before rebuilding
+`vendor/python-libs`, stop the Browser and Scheduler services owned by the
+Runtime Supervisor. Only terminate PIDs explicitly marked as managed in
+`state.json` whose command lines match Agent Forge services; never automatically
+kill unknown or adopted processes. Confirm loopback ports are released before
+removing Vendor. Both the Windows PowerShell 5.1 Parser and the complete Smoke
+must pass after the rebuild.
+
 ## Week 0 completion checklist
 
-- [ ] Latest Windows fast contracts pass.
-- [ ] Latest Windows full suite passes with no unhandled thread exceptions.
-- [ ] All direct DeepSeek business callers use Model Gateway.
-- [ ] Static no-bypass check prevents endpoint reintroduction.
-- [ ] Production Search uses SQLite Cache Repository and no longer writes legacy
-      pipeline/search JSON caches.
-- [ ] Vision Reducer is wired into PDF recognition.
-- [ ] Memory candidate operations are exposed through the main Memory CLI.
-- [ ] Profile-aware Delivery checker is the canonical delivery/UI entry point.
-- [ ] Windows clean-install and real-service smoke-test instructions are ready
-      for the local Codex pass.
-- [ ] README, Architecture, Roadmap, PR description, and test report match the
-      tested commit.
+- [x] Windows fast contracts pass.
+- [x] Windows full suite passes with no unhandled thread exceptions.
+- [x] Model Gateway no-bypass is enforced.
+- [x] Production Search uses the SQLite Cache Repository and no longer writes
+      legacy pipeline/search JSON caches.
+- [x] Vision Reducer is wired into PDF recognition.
+- [x] Memory candidate operations are exposed through the main Memory CLI.
+- [x] Profile-aware Delivery checker is the canonical delivery/UI entry point.
+- [x] Clean Windows Vendor install and Chromium install pass.
+- [x] Browser/Scheduler Supervisor lifecycle passes.
+- [x] README, Architecture, Roadmap, PR description, and test report align with
+      the finalized foundation.
+
+Evidence:
+
+- Foundation code commit: `b0d32fe114f1880646ece528ab1150e3070da6f5`
+- Windows release run: `31066789367`
+- Tests: 2522 total, 2519 passed, 3 skipped, 0 failures, 0 errors
+- PR: #1 merged
+- Main push workflows: Gateway contracts, Capability contracts, Windows release
+  gate, and CI — success
 
 ## Session log
 
@@ -171,3 +195,17 @@ process cleanup.
 
 Append only outcomes that were actually committed and verified. Replace pending
 claims with exact Windows workflow results when available.
+
+### 2026-08-06 — Week 0 foundation completed
+
+- PR #1 was Squash Merged; the main foundation code baseline is
+  `b0d32fe114f1880646ece528ab1150e3070da6f5`.
+- Windows Release Gate run `31066789367` reported 2522 tests, 2519 passed, 3
+  skipped, 0 failures, and 0 errors.
+- Local Windows Smoke completed its Vendor, Chromium, Browser, Scheduler, and
+  Supervisor lifecycle, including cleanup.
+- The old hardening branch was deleted. The next phase is the 2.0 Lightweight
+  Multi-Agent Kernel.
+- Real Provider credentials, private data, and visible-browser acceptance remain
+  local-only. Destructive backup and restore drills are later Roadmap work, not
+  a 2.0 prerequisite.

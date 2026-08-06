@@ -1,6 +1,6 @@
 # Agent Forge Architecture
 
-Status: pre-2.0 foundation, Windows-first.
+Status: pre-2.0 Windows-first foundation complete; 2.0 kernel work is next.
 
 This document describes current executable behavior. Archived version plans are
 historical design inputs and are not implementation status.
@@ -327,10 +327,12 @@ as GitHub Actions artifacts.
 
 ## 14. Pre-2.0 boundary
 
-The foundation now supports reliable single-Agent execution and reusable
-capabilities. It does **not** yet implement the planned Multi-Agent Kernel.
+The completed foundation supports reliable single-Agent execution and reusable
+capabilities. It does **not** implement the planned Multi-Agent Kernel yet.
 
-2.0 will add a small Coordinator/Worker/Reviewer model with typed Task,
-Handoff, Artifact, Approval, and checkpoint objects. It will reuse the current
-Gateway, Search, Browser, Scheduler, Memory, Run/Event, and SQLite layers rather
-than replacing them with a second platform.
+2.0 kernel work is the next phase. It may add a small
+Coordinator/Worker/Reviewer model with typed Task, Handoff, Artifact, Approval,
+and checkpoint objects, but those components are not implemented in the current
+repository. The kernel will reuse the existing Model Gateway, Search, Browser,
+Scheduler, Memory, Run/Step/Event, and SQLite layers rather than replacing them
+with a second platform.
