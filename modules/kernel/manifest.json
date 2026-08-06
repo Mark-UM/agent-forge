@@ -1,0 +1,43 @@
+{
+  "name": "kernel",
+  "version": "2.0.0",
+  "description": "Framework-neutral Agent Forge 2.0 contracts, state machines, and transactional SQLite Task/checkpoint authority",
+  "entrypoints": {},
+  "capabilities": [
+    {
+      "name": "kernel.contracts",
+      "version": "1.0",
+      "description": "Typed Task, AgentSpec, Handoff, Artifact, Approval, budget, permission, failure, degraded-result, and state-transition contracts"
+    },
+    {
+      "name": "kernel.task_authority",
+      "version": "1.0",
+      "description": "Versioned SQLite Task/checkpoint repository with idempotency, compare-and-set, atomic checkpoints, and bounded execution claims"
+    }
+  ],
+  "dependencies": {
+    "required": ["Python standard library"],
+    "optional": []
+  },
+  "credentials": [],
+  "health_checks": [
+    {
+      "command": "python -c \"import modules.kernel; assert modules.kernel.TaskRepository\"",
+      "description": "Verify the formal Kernel package and Task repository import",
+      "timeout": 30
+    }
+  ],
+  "storage": [
+    {
+      "type": "sqlite",
+      "path": "_runtime/kernel/kernel.db",
+      "tables": [
+        "kernel_schema_migrations",
+        "kernel_tasks",
+        "kernel_task_checkpoints"
+      ],
+      "description": "Dedicated Kernel Task, claim, idempotency, and checkpoint authority; test code may inject a temporary database path"
+    }
+  ],
+  "experimental": true
+}

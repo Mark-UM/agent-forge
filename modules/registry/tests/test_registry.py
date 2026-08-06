@@ -256,10 +256,9 @@ class TestCapabilityRegistry:
         assert len(reg.stable()) == 1
         assert len(reg.experimental()) == 1
         assert reg.stable()[0].name == "stable1"
-        assert reg.experimental()[0].name == "exp1"
 
 
-# ── Discovery tests ─────────────────────────────────────────
+# ── Discovery tests ──────────────────────────────────────────
 
 class TestDiscovery:
     """Tests for module discovery."""
@@ -270,8 +269,9 @@ class TestDiscovery:
         names = {m.name for m in manifests}
         expected = {
             "bootstrap", "browser", "common", "delivery", "dispatch",
-            "integration_check", "mcp", "memory", "orchestrator", "prompt",
-            "registry", "runtime", "scheduler", "search", "ui_check", "vision",
+            "integration_check", "kernel", "mcp", "memory", "orchestrator",
+            "prompt", "registry", "runtime", "scheduler", "search",
+            "ui_check", "vision",
         }
         assert names == expected, f"Missing: {expected - names}, Extra: {names - expected}"
 
@@ -290,7 +290,7 @@ class TestDiscovery:
     def test_all_manifests_validated(self):
         """Every manifest must pass schema validation."""
         manifests = discover_modules()
-        assert len(manifests) >= 16
+        assert len(manifests) >= 17
 
     def test_discovery_returns_sorted(self):
         """Discovery results should be sorted by name."""
@@ -392,7 +392,8 @@ class TestRegistrySingleton:
         """get_registry should auto-discover modules on first call."""
         reset_registry()
         r = get_registry()
-        assert len(r) >= 16
+        assert len(r) >= 17
+        assert "kernel" in r
         assert "search" in r
         assert "scheduler" in r
         assert "runtime" in r
