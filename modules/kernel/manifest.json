@@ -1,7 +1,7 @@
 {
   "name": "kernel",
   "version": "2.0.0",
-  "description": "Framework-neutral Agent Forge 2.0 contracts, state machines, and transactional SQLite Task/checkpoint authority",
+  "description": "Framework-neutral Agent Forge 2.0 contracts, transactional Task authority, and bounded deterministic Coordinator/Worker execution",
   "entrypoints": {},
   "capabilities": [
     {
@@ -13,17 +13,22 @@
       "name": "kernel.task_authority",
       "version": "1.0",
       "description": "Versioned SQLite Task/checkpoint repository with idempotency, compare-and-set, atomic checkpoints, and bounded execution claims"
+    },
+    {
+      "name": "kernel.execution",
+      "version": "1.0",
+      "description": "Single-attempt deterministic Coordinator/direct/Worker-as-tool loop with AgentSpec authorization, finite structural budgets, cancellation, timeout, duplicate protection, and Run/Step/Event correlation"
     }
   ],
   "dependencies": {
-    "required": ["Python standard library"],
+    "required": ["Python standard library", "modules.common.run"],
     "optional": []
   },
   "credentials": [],
   "health_checks": [
     {
-      "command": "python -c \"import modules.kernel; assert modules.kernel.TaskRepository\"",
-      "description": "Verify the formal Kernel package and Task repository import",
+      "command": "python -c \"import modules.kernel; assert modules.kernel.TaskRepository; assert modules.kernel.KernelExecutionEngine\"",
+      "description": "Verify the formal Kernel package, Task authority, and bounded execution loop import",
       "timeout": 30
     }
   ],
@@ -36,7 +41,7 @@
         "kernel_tasks",
         "kernel_task_checkpoints"
       ],
-      "description": "Dedicated Kernel Task, claim, idempotency, and checkpoint authority; test code may inject a temporary database path"
+      "description": "Dedicated Kernel Task, claim, idempotency, and checkpoint authority; execution output is returned in memory while checkpoints retain bounded summaries and digests"
     }
   ],
   "experimental": true

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from modules.kernel import TaskRepository
+from modules.kernel import KernelExecutionEngine, TaskRepository
 from modules.registry.discovery import discover_modules_report
 
 
@@ -21,6 +21,7 @@ def test_kernel_is_a_formal_registry_module() -> None:
     assert {capability.name for capability in manifest.capabilities} == {
         "kernel.contracts",
         "kernel.task_authority",
+        "kernel.execution",
     }
     assert len(manifest.storage) == 1
     assert manifest.storage[0].path == "_runtime/kernel/kernel.db"
@@ -29,6 +30,10 @@ def test_kernel_is_a_formal_registry_module() -> None:
         "kernel_tasks",
         "kernel_task_checkpoints",
     }
+
+
+def test_kernel_execution_is_importable_without_framework_or_provider() -> None:
+    assert KernelExecutionEngine is not None
 
 
 def test_kernel_schema_has_a_versioned_checksum(tmp_path: Path) -> None:

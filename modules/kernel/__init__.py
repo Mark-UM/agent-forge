@@ -1,4 +1,4 @@
-"""Agent Forge 2.0 framework-neutral kernel contracts and Task authority."""
+"""Agent Forge 2.0 framework-neutral contracts, Task authority, and execution."""
 
 from .contracts import (
     AgentRole,
@@ -21,6 +21,27 @@ from .contracts import (
     Task,
     TaskStatus,
 )
+from .agents import (
+    AgentCommand,
+    AgentResult,
+    AgentRuntime,
+    CancellationToken,
+    DeterministicAgentRuntime,
+)
+from .coordinator import CoordinatorPlan, DeterministicCoordinator
+from .execution import ExecutionOutcome, KernelExecutionEngine
+from .execution_support import (
+    AgentBusyError,
+    AgentResultStatus,
+    BudgetExceededError,
+    DuplicateExecutionError,
+    ExecutionCancelled,
+    ExecutionError,
+    ExecutionMode,
+    NoEligibleAgentError,
+    PermissionDeniedError,
+)
+from .permissions import PermissionAuthorizer, PermissionRequest
 from .repository import (
     ClaimConflictError,
     ConcurrencyConflictError,
@@ -34,18 +55,33 @@ from .repository import (
 from .state import InvalidTransitionError
 
 __all__ = [
+    "AgentBusyError",
+    "AgentCommand",
+    "AgentResult",
+    "AgentResultStatus",
     "AgentRole",
+    "AgentRuntime",
     "AgentSpec",
     "Approval",
     "ApprovalStatus",
     "Artifact",
     "ArtifactStatus",
+    "BudgetExceededError",
     "BudgetLimit",
     "BudgetUsage",
+    "CancellationToken",
     "ClaimConflictError",
     "ConcurrencyConflictError",
+    "CoordinatorPlan",
     "DEFAULT_DB_PATH",
     "DegradedInfo",
+    "DeterministicAgentRuntime",
+    "DeterministicCoordinator",
+    "DuplicateExecutionError",
+    "ExecutionCancelled",
+    "ExecutionError",
+    "ExecutionMode",
+    "ExecutionOutcome",
     "FailureCategory",
     "FailureInfo",
     "Handoff",
@@ -53,7 +89,12 @@ __all__ = [
     "IdempotencyConflictError",
     "InvalidTransitionError",
     "KernelContractError",
+    "KernelExecutionEngine",
     "KernelRepositoryError",
+    "NoEligibleAgentError",
+    "PermissionAuthorizer",
+    "PermissionDeniedError",
+    "PermissionRequest",
     "PermissionScope",
     "SensitiveValueError",
     "Sensitivity",
