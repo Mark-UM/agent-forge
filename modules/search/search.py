@@ -317,7 +317,7 @@ def main() -> int:
         "cache_get",
         "cache_clean",
     )
-    return int(_legacy._cli() or 0)
+    return int(_legacy.main() or 0)
 
 
 if __name__ == "__main__":
