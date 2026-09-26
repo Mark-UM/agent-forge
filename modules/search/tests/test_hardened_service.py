@@ -206,3 +206,43 @@ def test_final_cache_hit_does_not_rewrite_cache() -> None:
     assert result.execution_status == "succeeded"
     assert stores == []
     assert result.result["step_reports"]["cache_store"]["status"] == "skipped"
+
+
+def test_production_search_stops_before_planning_when_redaction_fails(
+    monkeypatch,
+) -> None:
+    import json
+    from modules.search import privacy
+
+    provider_calls: list[str] = []
+    planner_calls: list[str] = []
+    registry = ProviderRegistry()
+    registry.register(FakeProvider("external", result_count=1, calls=provider_calls))
+
+    def planner(**kwargs):
+        planner_calls.append(kwargs["query"])
+        return _planner(**kwargs)
+
+    service = SearchService(
+        registry=registry,
+        planner_fn=planner,
+        cache_get_fn=lambda key: None,
+        cache_store_fn=lambda key, value: None,
+    )
+    monkeypatch.setattr(
+        privacy,
+        "redact_outbound",
+        lambda query: (query, {"error": "redactor unavailable"}),
+    )
+    result = service.search(
+        SearchServiceRequest(
+            query="contact 13800138000", verify=False, no_cache=True
+        ),
+        record_run=True,
+    )
+    assert result.success is False
+    assert result.error == "Outbound query redaction failed"
+    assert planner_calls == []
+    assert provider_calls == []
+    assert result.run is not None
+    assert "13800138000" not in json.dumps(result.run.to_dict())

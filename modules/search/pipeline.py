@@ -217,23 +217,30 @@ class SearchPipeline:
     # ── Step 2: normalize_query ─────────────────────────────
 
     def normalize_query(self) -> OperationResult:
-        """Normalize whitespace and surface PII redaction (best-effort)."""
+        """Normalize whitespace and require successful PII redaction."""
         q = self.request.query.strip()
         # Collapse whitespace
         q = ' '.join(q.split())
-        # Best-effort PII redaction via privacy module if available
         try:
-            from privacy import redact_outbound  # type: ignore[import]
+            from modules.search.privacy import redact_outbound
             redacted, meta = redact_outbound(q)
-            if meta.get('redacted_count', 0) > 0:
-                q = redacted
-                self.warnings.append(
-                    f"normalize_query redacted {meta['redacted_count']} PII pattern(s)"
-                )
-        except ImportError:
-            pass  # privacy module optional
-        except Exception as e:
-            self.warnings.append(f"normalize_query privacy fallback: {type(e).__name__}")
+            if (not isinstance(meta, dict) or meta.get('error') or
+                    not isinstance(redacted, str) or not redacted.strip()):
+                raise ValueError('redaction did not produce a safe query')
+        except Exception:
+            self.normalized_query = ''
+            res = OperationResult.failed(
+                code='privacy_redaction_failed',
+                message='Outbound query redaction failed',
+                step='normalize_query',
+            )
+            self._record_step('normalize_query', res)
+            return res
+        if meta.get('redacted_count', 0) > 0:
+            self.warnings.append(
+                f"normalize_query redacted {meta['redacted_count']} PII pattern(s)"
+            )
+        q = redacted
         self.normalized_query = q
         res = OperationResult.success_with(data={'normalized_query': q},
                                             step='normalize_query')
@@ -749,7 +756,9 @@ class SearchPipeline:
         if not v.success:
             return self._build_result()
 
-        self.normalize_query()
+        normalized = self.normalize_query()
+        if not normalized.success:
+            return self._build_result()
         self.plan_step()
 
         # final_cache_lookup may short-circuit provider execution if fresh hit

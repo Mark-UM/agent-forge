@@ -411,6 +411,37 @@ class TestTypedResultContract:
         assert 'format' not in pipe.step_reports
 
 
+class TestPrivacyFailureStopsOutbound:
+    @pytest.mark.parametrize('failure', ['reported', 'raised'])
+    def test_pipeline_stops_before_planner_and_provider(self, monkeypatch, failure):
+        from modules.search import privacy
+
+        provider = FakeProvider()
+        planner_calls = []
+
+        def planner(**kwargs):
+            planner_calls.append(kwargs)
+            return _make_planner_fn(['safe query'])(**kwargs)
+
+        def bad_redaction(query):
+            if failure == 'raised':
+                raise RuntimeError('redaction unavailable')
+            return query, {'redacted_count': 0, 'error': 'redaction unavailable'}
+
+        monkeypatch.setattr(privacy, 'redact_outbound', bad_redaction)
+        pipe = SearchPipeline(
+            SearchRequest(query='contact 13800138000'),
+            registry=_make_registry(provider), planner_fn=planner,
+        )
+        result = pipe.execute()
+        assert pipe.step_reports['normalize_query'].status == StepStatus.FAILED
+        assert 'provider_execute' not in pipe.step_reports
+        assert planner_calls == []
+        assert provider.calls == []
+        assert pipe.normalized_query == ''
+        assert result.success is False
+
+
 # ── Degraded mode ────────────────────────────────────────────
 
 class TestDegradedMode:

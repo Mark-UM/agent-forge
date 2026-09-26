@@ -248,17 +248,17 @@ class TestMetadataCorrectness(unittest.TestCase):
 class TestExceptionHandling(unittest.TestCase):
     """异常路径测试。"""
 
-    def test_regex_exception_returns_original(self):
-        """正则异常时应返回原 query + 警告。"""
-        query = '正常查询'
+    def test_regex_exception_returns_empty(self):
+        """正则异常时不能返回原始敏感 query。"""
+        query = '联系 13800138000'
         with patch('privacy._PII_PATTERNS',
                    [('email', None, '[REDACTED-EMAIL]')]):
             redacted, meta = redact_outbound(query)
-        self.assertEqual(redacted, query)
+        self.assertEqual(redacted, '')
         self.assertEqual(meta['redacted_count'], 0)
         self.assertEqual(meta['patterns_matched'], [])
         self.assertEqual(meta['original_length'], len(query))
-        self.assertEqual(meta['redacted_length'], len(query))
+        self.assertEqual(meta['redacted_length'], 0)
         self.assertIn('error', meta)
 
     def test_findall_exception_caught(self):
@@ -275,7 +275,7 @@ class TestExceptionHandling(unittest.TestCase):
         with patch('privacy._PII_PATTERNS',
                    [('mock', FakePattern(), '[MOCK]')]):
             redacted, meta = redact_outbound(query)
-        self.assertEqual(redacted, query)
+        self.assertEqual(redacted, '')
         self.assertIn('error', meta)
 
 
