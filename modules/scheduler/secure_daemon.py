@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import sys
 import threading
 import time
 from typing import Any
@@ -43,6 +44,13 @@ def execute_job_with_tracking(
 
     job_data = job_store.get_job(job_id)
     if job_data is None:
+        if run_id is not None:
+            job_store.update_job_run(
+                run_id,
+                status="failed",
+                ended_at=datetime.now(timezone.utc).isoformat(),
+                error="job not found",
+            )
         return {
             "job_id": job_id,
             "run_id": run_id,
@@ -182,6 +190,38 @@ def _add_job_to_scheduler_compat(
     )
 
 
+def _fail_accepted_run(run_id: str, error: Exception) -> bool:
+    """Make an accepted run terminal if worker setup fails."""
+    from modules.scheduler import job_store
+
+    try:
+        current = job_store.get_job_run(run_id)
+        if current is None:
+            return False
+        if current["status"] in {"succeeded", "failed"}:
+            return True
+        return job_store.update_job_run(
+            run_id,
+            status="failed",
+            ended_at=datetime.now(timezone.utc).isoformat(),
+            error=f"worker failure: {type(error).__name__}",
+        )
+    except Exception as update_error:
+        print(
+            f"[scheduler] could not close run {run_id}: "
+            f"{type(update_error).__name__}",
+            file=sys.stderr,
+        )
+        return False
+
+
+def _run_manual_job(job_id: str, run_id: str) -> None:
+    try:
+        execute_job_with_tracking(job_id, "manual", run_id=run_id)
+    except Exception as exc:
+        _fail_accepted_run(run_id, exc)
+
+
 class SecureSchedulerHandler(legacy.SchedulerHandler):
     """Authenticated handler with corrected runs and production triggers."""
 
@@ -260,17 +300,26 @@ class SecureSchedulerHandler(legacy.SchedulerHandler):
                 return
             run_id = job_store.create_job_run(job_id, triggered_by="manual")
 
-        worker = threading.Thread(
-            target=execute_job_with_tracking,
-            kwargs={
-                "job_id": job_id,
-                "triggered_by": "manual",
-                "run_id": run_id,
-            },
-            daemon=True,
-            name=f"job-run-{run_id}",
-        )
-        worker.start()
+        try:
+            worker = threading.Thread(
+                target=_run_manual_job,
+                args=(job_id, run_id),
+                daemon=True,
+                name=f"job-run-{run_id}",
+            )
+            worker.start()
+        except Exception as exc:
+            persisted = _fail_accepted_run(run_id, exc)
+            self._send_json(
+                500,
+                {
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "status": "failed" if persisted else "unknown",
+                    "error": "worker could not start",
+                },
+            )
+            return
         self._send_json(
             202,
             {"job_id": job_id, "run_id": run_id, "status": "queued"},
