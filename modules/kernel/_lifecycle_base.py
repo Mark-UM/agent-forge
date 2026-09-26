@@ -349,6 +349,16 @@ def _validate_lease_seconds(value: int) -> int:
     return value
 
 
+def _protected_workspace_target(parts: tuple[str, ...]) -> str | None:
+    folded = tuple(part.casefold() for part in parts)
+    if ".git" in folded:
+        return ".git"
+    if any(first == "_runtime" and second == "kernel"
+           for first, second in zip(folded, folded[1:])):
+        return "Kernel authority storage"
+    return None
+
+
 def _normalise_reference(reference: str) -> str:
     if not isinstance(reference, str):
         raise KernelContractError("artifact reference must be a string")
@@ -366,10 +376,9 @@ def _normalise_reference(reference: str) -> str:
         or any("\x00" in part for part in parts)
     ):
         raise KernelContractError("artifact reference must be relative and non-escaping")
-    if any(part.lower() == ".git" for part in parts):
-        raise KernelContractError("artifact reference cannot target .git")
-    if len(parts) >= 2 and parts[0] == "_runtime" and parts[1] == "kernel":
-        raise KernelContractError("artifact reference cannot target Kernel authority storage")
+    protected = _protected_workspace_target(parts)
+    if protected is not None:
+        raise KernelContractError(f"artifact reference cannot target {protected}")
     return path.as_posix()
 
 
@@ -379,9 +388,12 @@ def _resolve_workspace_file(workspace_root: str | Path, reference: str) -> Path:
         raise ArtifactIntegrityError("workspace root is not a directory")
     candidate = (root / reference).resolve(strict=True)
     try:
-        candidate.relative_to(root)
+        relative = candidate.relative_to(root)
     except ValueError as exc:
         raise ArtifactIntegrityError("artifact path escapes the assigned Workspace") from exc
+    protected = _protected_workspace_target(candidate.parts)
+    if protected is not None:
+        raise ArtifactIntegrityError(f"artifact path targets protected {protected}")
     if not candidate.is_file():
         raise ArtifactIntegrityError("artifact path is not a regular file")
     return candidate

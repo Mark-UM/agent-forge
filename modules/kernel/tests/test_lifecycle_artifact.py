@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 import os
 import sqlite3
+import subprocess
 
 import pytest
 
@@ -29,7 +30,7 @@ def test_artifact_registration_verifies_path_digest_and_task_reference(tmp_path:
     workspace = tmp_path / "workspace"
     (workspace / "work").mkdir(parents=True)
     file_path = workspace / "work" / "note.txt"
-    file_path.write_text("hello\n", encoding="utf-8")
+    file_path.write_bytes(b"hello\n")
 
     artifact, updated_task, created = repo.register_file_artifact(
         task_id=task.task_id,
@@ -109,6 +110,95 @@ def test_artifact_path_escape_and_symlink_escape_are_rejected(tmp_path: Path) ->
             expected_task_version=task.record_version,
             now=NOW,
         )
+
+def test_artifact_case_variant_kernel_storage_is_rejected(tmp_path: Path) -> None:
+    repo = LifecycleRepository(tmp_path / "kernel.db")
+    task = running_task(repo, owner="worker.text")
+    workspace = tmp_path / "workspace"
+    protected = workspace / "_RUNTIME" / "KERNEL" / "authority.db"
+    protected.parent.mkdir(parents=True)
+    protected.write_bytes(b"protected")
+
+    with pytest.raises(KernelContractError, match="Kernel authority storage"):
+        repo.register_file_artifact(
+            task_id=task.task_id,
+            producer_agent_id="worker.text",
+            workspace_root=workspace,
+            reference="_RUNTIME/KERNEL/authority.db",
+            artifact_type="text.file.v1",
+            provenance=provenance(),
+            idempotency_key="case-variant-kernel-storage",
+            claim_token=task.claim_token,
+            expected_task_version=task.record_version,
+            now=NOW,
+        )
+
+
+def test_artifact_internal_symlink_to_git_is_rejected(tmp_path: Path) -> None:
+    repo = LifecycleRepository(tmp_path / "kernel.db")
+    task = running_task(repo, owner="worker.text")
+    workspace = tmp_path / "workspace"
+    protected = workspace / ".git" / "config"
+    protected.parent.mkdir(parents=True)
+    protected.write_bytes(b"protected")
+    alias = workspace / "alias"
+    try:
+        alias.symlink_to(protected.parent, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        if os.name != "nt":
+            pytest.skip("directory symlink creation is unavailable")
+        # Windows junctions do not require the symlink privilege.
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(alias), str(protected.parent)],
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.skip("directory junction creation is unavailable")
+
+    with pytest.raises(ArtifactIntegrityError, match="protected"):
+        repo.register_file_artifact(
+            task_id=task.task_id,
+            producer_agent_id="worker.text",
+            workspace_root=workspace,
+            reference="alias/config",
+            artifact_type="text.file.v1",
+            provenance=provenance(),
+            idempotency_key="internal-git-alias",
+            claim_token=task.claim_token,
+            expected_task_version=task.record_version,
+            now=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    ("root_parts", "reference"),
+    [((".git",), "config"), (("_runtime",), "kernel/kernel.db")],
+)
+def test_artifact_reselected_protected_root_is_rejected(
+    tmp_path: Path, root_parts: tuple[str, ...], reference: str,
+) -> None:
+    repo = LifecycleRepository(tmp_path / "kernel.db")
+    task = running_task(repo, owner="worker.text")
+    protected_root = (tmp_path / "workspace").joinpath(*root_parts)
+    protected_file = protected_root / reference
+    protected_file.parent.mkdir(parents=True)
+    protected_file.write_bytes(b"protected")
+
+    with pytest.raises(ArtifactIntegrityError, match="protected"):
+        repo.register_file_artifact(
+            task_id=task.task_id,
+            producer_agent_id="worker.text",
+            workspace_root=protected_root,
+            reference=reference,
+            artifact_type="text.file.v1",
+            provenance=provenance(),
+            idempotency_key="reselected-protected-root",
+            claim_token=task.claim_token,
+            expected_task_version=task.record_version,
+            now=NOW,
+        )
+
 
 def test_artifact_mutation_is_detected_before_acceptance(tmp_path: Path) -> None:
     repo = LifecycleRepository(tmp_path / "kernel.db")
