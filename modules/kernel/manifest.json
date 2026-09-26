@@ -1,7 +1,7 @@
 {
   "name": "kernel",
   "version": "2.0.0",
-  "description": "Framework-neutral Agent Forge 2.0 contracts, transactional Task authority, and bounded deterministic Coordinator/Worker execution",
+  "description": "Framework-neutral Agent Forge 2.0 contracts, transactional Task and lifecycle authority, and bounded deterministic Coordinator/Worker execution",
   "entrypoints": {},
   "capabilities": [
     {
@@ -18,6 +18,11 @@
       "name": "kernel.execution",
       "version": "1.0",
       "description": "Single-attempt deterministic Coordinator/direct/Worker-as-tool loop with AgentSpec authorization, finite structural budgets, cancellation, timeout, duplicate protection, and Run/Step/Event correlation"
+    },
+    {
+      "name": "kernel.lifecycle_authority",
+      "version": "1.0",
+      "description": "Persisted Handoff ownership transfer, immutable Artifact digest/provenance/supersession, scoped Approval decision and consumption, CAS idempotency, and append-only domain audit"
     }
   ],
   "dependencies": {
@@ -27,8 +32,8 @@
   "credentials": [],
   "health_checks": [
     {
-      "command": "python -c \"import modules.kernel; assert modules.kernel.TaskRepository; assert modules.kernel.KernelExecutionEngine\"",
-      "description": "Verify the formal Kernel package, Task authority, and bounded execution loop import",
+      "command": "python -c \"import modules.kernel; assert modules.kernel.TaskRepository; assert modules.kernel.KernelExecutionEngine; assert modules.kernel.LifecycleRepository\"",
+      "description": "Verify the formal Kernel package, Task authority, bounded execution loop, and Slice 3 lifecycle authority import",
       "timeout": 30
     }
   ],
@@ -39,9 +44,14 @@
       "tables": [
         "kernel_schema_migrations",
         "kernel_tasks",
-        "kernel_task_checkpoints"
+        "kernel_task_checkpoints",
+        "kernel_records_schema_migrations",
+        "kernel_handoffs",
+        "kernel_artifacts",
+        "kernel_approvals",
+        "kernel_domain_audit"
       ],
-      "description": "Dedicated Kernel Task, claim, idempotency, and checkpoint authority; execution output is returned in memory while checkpoints retain bounded summaries and digests"
+      "description": "Dedicated Kernel Task, claim, checkpoint, Handoff, Artifact, Approval, idempotency, and append-audit authority; raw Agent or Artifact content is not stored"
     }
   ],
   "experimental": true

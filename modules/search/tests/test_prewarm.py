@@ -37,8 +37,15 @@ from prewarm import (
 
 
 # ── 测试数据 ────────────────────────────────────────────────────
+# Keep the recent samples inside the 30-day window on every test run.
+SAMPLE_NOW = datetime.now().replace(microsecond=0)
+SAMPLE_RECENT = (SAMPLE_NOW - timedelta(days=1)).isoformat()
+SAMPLE_SAVED = (SAMPLE_NOW - timedelta(days=2)).isoformat()
+SAMPLE_NO_RESULTS = (SAMPLE_NOW - timedelta(days=3)).isoformat()
+SAMPLE_OLD = (SAMPLE_NOW - timedelta(days=60)).isoformat()
+
 SAMPLE_ENTRY_FULL = {
-    'timestamp': '2026-07-20T10:00:00',
+    'timestamp': SAMPLE_RECENT,
     'query': 'React useEffect cleanup',
     'score': 8.5,
     'satisfied': True,
@@ -58,7 +65,7 @@ SAMPLE_ENTRY_FULL = {
 }
 
 SAMPLE_ENTRY_SAVED = {
-    'timestamp': '2026-07-19T15:30:00',
+    'timestamp': SAMPLE_SAVED,
     'query': 'DeepSeek V4 Pro',
     'score': 9.0,
     'satisfied': True,
@@ -74,7 +81,7 @@ SAMPLE_ENTRY_SAVED = {
 }
 
 SAMPLE_ENTRY_NO_RESULTS = {
-    'timestamp': '2026-07-18T08:00:00',
+    'timestamp': SAMPLE_NO_RESULTS,
     'query': 'React useEffect cleanup',  # 同 query 但无 top_results
     'score': 0,
     'satisfied': False,
@@ -87,7 +94,7 @@ SAMPLE_ENTRY_NO_RESULTS = {
 }
 
 SAMPLE_ENTRY_OLD = {
-    'timestamp': '2026-06-01T08:00:00',  # 远早于 30 天
+    'timestamp': SAMPLE_OLD,  # 远早于 30 天
     'query': 'Old query',
     'score': 5.0,
     'satisfied': False,
@@ -192,7 +199,7 @@ class TestLoadHistoryEntries(unittest.TestCase):
             with patch('prewarm._LOG_DIR', tmp):
                 files = _all_log_files()
             entries = _load_history_entries(files, days_limit=30)
-            # SAMPLE_ENTRY_OLD (2026-06-01) 应被排除
+            # SAMPLE_ENTRY_OLD (60 days ago) 应被排除
             self.assertEqual(len(entries), 1)
             self.assertEqual(entries[0]['query'], 'React useEffect cleanup')
         finally:
@@ -549,7 +556,7 @@ class TestPrewarmCache(unittest.TestCase):
             for i in range(1, 6):
                 for _ in range(i):
                     entries.append({
-                        'timestamp': '2026-07-20T10:00:00',
+                        'timestamp': SAMPLE_RECENT,
                         'query': f'q{i}',
                         'location': 'zhuhai',
                         'layer_hint': '',
@@ -577,7 +584,7 @@ class TestPrewarmCache(unittest.TestCase):
                 [SAMPLE_ENTRY_FULL, SAMPLE_ENTRY_OLD], tmp)
             with patch('prewarm._LOG_DIR', tmp):
                 with patch('prewarm.CACHE_FILE', cache_file):
-                    # 30 天窗口：SAMPLE_ENTRY_OLD (6月1日) 被排除
+                    # 30 天窗口：60 天前的 SAMPLE_ENTRY_OLD 被排除
                     result = prewarm_cache(top_n=10, days_window=30)
             self.assertTrue(result['success'])
             # 只统计到 SAMPLE_ENTRY_FULL
