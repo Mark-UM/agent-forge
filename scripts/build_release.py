@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""R2-7.3: Build a release package with allowlist and manifest.
+"""Build a release package from Git-indexed files with a safety allowlist.
 
 Generates a release-manifest.json recording every included file and its
 SHA-256 hash. Excludes sensitive, generated, and transient files.
@@ -8,7 +8,7 @@ Excluded patterns (mandatory):
     AGENTS_COMPOSED.md          (generated prompt)
     markconfig/profile.md       (personal profile)
     markconfig/secrets.json     (secrets)
-    *secret* *credential*       (any secret/credential file)
+    markconfig/secrets*        (private configuration, except example)
     _runtime/                   (runtime state)
     _data/private/              (private data)
     cache/ logs/                (transient data)
@@ -29,7 +29,7 @@ Usage:
 import argparse
 import hashlib
 import json
-import os
+import subprocess
 import sys
 import zipfile
 from datetime import datetime, timezone
@@ -73,17 +73,23 @@ MANDATORY_EXCLUDE_FILES = {
     'markconfig/profile.md',
     'markconfig/secrets.json',
 }
-
-# Combined set for backward compatibility with collect_files pruning.
-MANDATORY_EXCLUDES = MANDATORY_EXCLUDE_DIRS | {'_data', 'markconfig'}
+SAFE_EXAMPLE_FILES = {
+    'markconfig/profile.example.md',
+    'markconfig/secrets.example.json',
+    '_data/memory/MEMORY.example.md',
+    '_data/memory/README-INIT.md',
+}
 
 # Glob patterns for exclusion (matched against basename or relative path)
 EXCLUDE_GLOBS = [
     '*.pyc',
     '*.pyo',
     '*.pyd',
-    '*secret*',
-    '*credential*',
+    '*.key',
+    '*.pem',
+    '*.pfx',
+    '.env',
+    '.env.*',
     '*.egg-info',
     '.DS_Store',
     'Thumbs.db',
@@ -100,6 +106,11 @@ REQUIRED_FILES = [
     'AGENTS_BASE.md',
     'opencode.json',
     'requirements.lock.txt',
+    '.opencode/package-lock.json',
+    'markconfig/profile.example.md',
+    'markconfig/secrets.example.json',
+    '_data/memory/MEMORY.example.md',
+    '_data/memory/README-INIT.md',
     'modules/common/__init__.py',
     'modules/common/result.py',
     'modules/common/errors.py',
@@ -122,6 +133,8 @@ def _should_exclude(rel_path: str) -> tuple:
     """
     parts = Path(rel_path).parts
     rel_posix = Path(rel_path).as_posix()
+    if rel_posix in SAFE_EXAMPLE_FILES:
+        return False, ''
 
     # 1. Check exact file excludes
     if rel_posix in MANDATORY_EXCLUDE_FILES:
@@ -143,61 +156,58 @@ def _should_exclude(rel_path: str) -> tuple:
     for pattern in EXCLUDE_GLOBS:
         if fnmatch.fnmatch(basename, pattern) or fnmatch.fnmatch(rel_posix, pattern):
             return True, f'matched glob: {pattern}'
-        # Also check case-insensitive for secret/credential
-        if pattern.startswith('*') and pattern.endswith('*'):
-            keyword = pattern[1:-1].lower()
-            if keyword in basename.lower() or keyword in rel_posix.lower():
-                return True, f'matched keyword: {keyword}'
+
 
     return False, ''
 
 
-def _sha256(file_path: Path) -> str:
-    """Compute SHA-256 hash of a file."""
-    h = hashlib.sha256()
-    with open(file_path, 'rb') as f:
-        while True:
-            chunk = f.read(8192)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
+def _sha256(content: bytes) -> str:
+    """Compute SHA-256 for the exact Git blob that will be packaged."""
+    return hashlib.sha256(content).hexdigest()
 
 
 def collect_files(root: Path) -> tuple:
-    """Collect all files for the release package.
+    """Collect safe paths and bytes from the Git index, not the worktree."""
+    root = root.resolve(strict=True)
+    git_root = subprocess.run(
+        ['git', '-C', str(root), 'rev-parse', '--show-toplevel'],
+        capture_output=True, text=True, encoding='utf-8', check=True,
+    ).stdout.strip()
+    if Path(git_root).resolve(strict=True) != root:
+        raise ValueError(f'Project root must be the Git worktree root: {root}')
+    output = subprocess.run(
+        ['git', '-C', str(root), 'ls-files', '--stage', '-z'],
+        capture_output=True, check=True,
+    ).stdout
 
-    Returns:
-        tuple: (included_files, excluded_files)
-            - included_files: list of (rel_path, abs_path) tuples
-            - excluded_files: list of (rel_path, reason) tuples
-    """
     included = []
     excluded = []
+    for record in output.split(b'\0'):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b'\t', 1)
+        mode, blob_id, stage = metadata.decode('ascii').split()
+        rel_str = raw_path.decode('utf-8')
+        rel_path = Path(rel_str)
+        if rel_path.is_absolute() or '..' in rel_path.parts:
+            raise ValueError(f'Unsafe Git-index path: {rel_str}')
+        if stage != '0':
+            raise ValueError(f'Unmerged Git-index path: {rel_str}')
+        should_exclude, reason = _should_exclude(rel_str)
+        if should_exclude:
+            excluded.append((rel_str, reason))
+            continue
+        if mode not in {'100644', '100755'}:
+            excluded.append((rel_str, f'non-regular Git mode: {mode}'))
+            continue
+        content = subprocess.run(
+            ['git', '-C', str(root), 'cat-file', 'blob', blob_id],
+            capture_output=True, check=True,
+        ).stdout
+        included.append((rel_str, content))
 
-    for dirpath, dirnames, filenames in os.walk(root):
-        # Skip excluded directories in-place (prunes traversal)
-        # Use MANDATORY_EXCLUDE_DIRS for single-level pruning,
-        # plus '_data' and 'markconfig' for multi-level pruning.
-        dirnames[:] = [
-            d for d in dirnames
-            if d not in MANDATORY_EXCLUDE_DIRS
-            and d not in ('_data', 'markconfig')
-        ]
-
-        for filename in filenames:
-            abs_path = Path(dirpath) / filename
-            rel_path = abs_path.relative_to(root)
-            rel_str = rel_path.as_posix()
-
-            should_exclude, reason = _should_exclude(rel_str)
-            if should_exclude:
-                excluded.append((rel_str, reason))
-            else:
-                included.append((rel_str, abs_path))
-
-    included.sort(key=lambda x: x[0])
-    excluded.sort(key=lambda x: x[0])
+    included.sort(key=lambda item: item[0])
+    excluded.sort(key=lambda item: item[0])
     return included, excluded
 
 
@@ -215,22 +225,30 @@ def verify_required_files(included_files: list) -> list:
     return missing
 
 
-def generate_manifest(included_files: list, root: Path) -> dict:
+def generate_manifest(included_files: list, root: Path,
+                      excluded_files: list | None = None) -> dict:
     """Generate the release manifest with file hashes."""
     manifest = {
         'generated_at': datetime.now(timezone.utc).isoformat(),
-        'project_root': str(root),
+        'source': 'git-index',
+        'source_commit': subprocess.run(
+            ['git', '-C', str(root), 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, encoding='utf-8', check=True,
+        ).stdout.strip(),
         'total_files': len(included_files),
+        'excluded_files': [
+            {'path': path, 'reason': reason}
+            for path, reason in (excluded_files or [])
+        ],
         'files': [],
     }
 
-    for rel_path, abs_path in included_files:
-        file_hash = _sha256(abs_path)
-        stat = abs_path.stat()
+    for rel_path, content in included_files:
+        file_hash = _sha256(content)
         manifest['files'].append({
             'path': rel_path,
             'sha256': file_hash,
-            'size_bytes': stat.st_size,
+            'size_bytes': len(content),
         })
 
     return manifest
@@ -287,12 +305,12 @@ def build_release(root: Path, output_dir: Path, dry_run: bool = False) -> int:
         print()
 
     # Verify sensitive files are NOT included
-    sensitive_patterns = ['profile.md', 'secrets', 'credential', 'AGENTS_COMPOSED']
-    leaked = []
-    for rel_path, _ in included:
-        for pat in sensitive_patterns:
-            if pat in rel_path:
-                leaked.append(rel_path)
+    leaked = [
+        rel_path for rel_path, _ in included
+        if rel_path in MANDATORY_EXCLUDE_FILES or
+        (rel_path.startswith('markconfig/secrets') and
+         rel_path not in SAFE_EXAMPLE_FILES)
+    ]
     if leaked:
         print("ERROR: Sensitive files leaked into release:")
         for f in leaked:
@@ -304,8 +322,17 @@ def build_release(root: Path, output_dir: Path, dry_run: bool = False) -> int:
         print(f"Would create: {output_dir}/release-manifest.json")
         return 0
 
+    # Publish only a committed index. Worktree edits never enter the package.
+    staged = subprocess.run(
+        ['git', '-C', str(root), 'diff', '--cached', '--quiet', 'HEAD', '--'],
+        check=False,
+    )
+    if staged.returncode != 0:
+        print('ERROR: Commit staged changes before building a release.')
+        return 1
+
     # Generate manifest
-    manifest = generate_manifest(included, root)
+    manifest = generate_manifest(included, root, excluded)
 
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -322,8 +349,8 @@ def build_release(root: Path, output_dir: Path, dry_run: bool = False) -> int:
     archive_path = output_dir / archive_name
 
     with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for rel_path, abs_path in included:
-            zf.write(abs_path, rel_path)
+        for rel_path, content in included:
+            zf.writestr(rel_path, content)
         # Include manifest in archive
         zf.write(manifest_path, 'release-manifest.json')
 
