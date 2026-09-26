@@ -202,8 +202,10 @@ def test_main_list_contexts(capsys):
         assert expected in captured.out
 
 
-def test_main_with_context_and_example(capsys):
+def test_main_with_context_and_example(capsys, tmp_path, monkeypatch):
     """CLI accepts --context and --example flags."""
+    monkeypatch.setattr("modules.prompt.log.RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr("modules.prompt.log.LOG_PATH", tmp_path / "composition_log.jsonl")
     rc = composer.main([
         "--profile", "default",
         "--context", "python",

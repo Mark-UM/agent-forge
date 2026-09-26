@@ -72,7 +72,7 @@ def _cmd_health(args: argparse.Namespace) -> int:
         print("No modules found.")
         return 1
 
-    health_results = run_health_checks(manifests=report.manifests)
+    health_results = run_health_checks(modules=report.manifests)
     if args.json:
         output = {
             "total_modules": len(report.manifests),

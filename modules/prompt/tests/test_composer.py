@@ -227,7 +227,9 @@ def test_main_list_profiles(capsys):
     assert "terse" in captured.out
 
 
-def test_main_stdout(capsys):
+def test_main_stdout(capsys, tmp_path, monkeypatch):
+    monkeypatch.setattr("modules.prompt.log.RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr("modules.prompt.log.LOG_PATH", tmp_path / "composition_log.jsonl")
     rc = composer.main(["--profile", "default"])
     captured = capsys.readouterr()
     assert rc == 0
