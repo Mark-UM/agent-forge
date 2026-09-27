@@ -1,6 +1,6 @@
 # Agent Forge Roadmap
 
-Status date: 2026-08-06.
+Status date: 2026-09-27 (foundation evidence remains dated 2026-08-06).
 
 This file contains unfinished product work. Archived proposals are design
 history, not delivery commitments.
@@ -31,17 +31,18 @@ Evidence:
 - PR #1 merged;
 - main push workflows passed.
 
-The pre-2.0 foundation is closed. Planning for the 2.0 Lightweight Multi-Agent
-Kernel is active; implementation has not started. Live credentials and private
-data remain local-only acceptance and are not shared CI inputs. Destructive
+The pre-2.0 foundation is closed. The 2.0 Kernel has since reached Slice 3;
+the dated foundation evidence above remains historical. Live credentials and
+private data remain local-only acceptance and are not shared CI inputs. Destructive
 backup and restore drills remain later Roadmap work rather than a 2.0
 prerequisite.
 
 ## 2.0 — Lightweight Multi-Agent Kernel
 
-Status: planning active; implementation not started.
+Status (2026-09-27): Slices 1-3 merged; F0 Fusion ADR documented. F1-F7
+integration and the complete 2.0 release remain unfinished.
 
-Planning package:
+2.0 design and acceptance documents:
 
 - [`2.0_EXECUTION_PLAN.md`](2.0_EXECUTION_PLAN.md) — delivery slices,
   architecture principles, compatibility, security, observability, and
@@ -50,13 +51,15 @@ Planning package:
   contracts, state machines, SQLite authority, idempotency, and failure
   semantics;
 - [`2.0_FRAMEWORK_POC.md`](2.0_FRAMEWORK_POC.md) — equivalent OpenAI Agents SDK
-  and PydanticAI PoC plan and formal decision gates;
+  and PydanticAI PoC plan, retained as historical research;
+- [`../adr/MYHARNESS_EXECUTOR_ADR.md`](../adr/MYHARNESS_EXECUTOR_ADR.md) —
+  Agent Forge Kernel / MyHarness Executor authority and F0-F7 gates;
 - [`2.0_ACCEPTANCE_MATRIX.md`](2.0_ACCEPTANCE_MATRIX.md) — traceable test,
   failure-injection, Windows, and release evidence requirements.
 
-These documents define planned work and decision gates. They do not advertise
-Kernel behavior as implemented, select a framework, add dependencies, or create
-a database schema.
+The original planning documents predate the merged implementation. The Fusion
+ADR selects a future Executor direction without enabling a runtime or adding
+dependencies. Read the Slice ADRs and code for implemented behavior.
 
 Goal: move from one coding Agent plus review procedures to a small, typed Agent
 kernel without introducing a second platform.
@@ -71,11 +74,13 @@ Deliver:
 - one SQLite task/checkpoint authority;
 - a simple single-file task completed end to end.
 
-Framework strategy:
+Executor strategy:
 
-- first PoC: OpenAI Agents SDK **or** PydanticAI;
-- select one after a measured DeepSeek/MCP integration comparison;
-- do not ship two primary orchestration frameworks;
+- Agent Forge keeps its self-owned Kernel and unique Task authority;
+- first integration probe: pinned MyHarness in a disposable read-only Workspace;
+- OpenAI Agents SDK and PydanticAI are not production dependencies of this path;
+- source, license, protocol, Gateway, permission, and Windows gates precede
+  production enablement;
 - ordinary short tasks remain direct function/tool calls.
 
 Non-goals:
@@ -221,7 +226,8 @@ Evaluate components through short PoCs and retain only one solution per role:
 
 | Need | Preferred direction |
 |---|---|
-| lightweight Agent/Handoff kernel | OpenAI Agents SDK or PydanticAI |
+| lightweight Agent/Handoff kernel | self-owned Agent Forge Kernel |
+| coding Executor candidate | pinned MyHarness behind the Executor contract |
 | durable long tasks | optional LangGraph adapter |
 | provider compatibility | LiteLLM SDK inside Model Gateway, no Proxy by default |
 | MCP plumbing | official MCP Python SDK |
