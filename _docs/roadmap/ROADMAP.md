@@ -39,7 +39,7 @@ prerequisite.
 
 ## 2.0 — Lightweight Multi-Agent Kernel
 
-Status (2026-09-27): Slices 1-3 merged; F0 Fusion ADR proposed. F1-F7
+Status (2026-09-27): Slices 1-3 merged; F0 Fusion ADR documented. F1-F7
 integration and the complete 2.0 release remain unfinished.
 
 2.0 design and acceptance documents:
@@ -53,7 +53,7 @@ integration and the complete 2.0 release remain unfinished.
 - [`2.0_FRAMEWORK_POC.md`](2.0_FRAMEWORK_POC.md) — equivalent OpenAI Agents SDK
   and PydanticAI PoC plan, retained as historical research;
 - [`../adr/MYHARNESS_EXECUTOR_ADR.md`](../adr/MYHARNESS_EXECUTOR_ADR.md) —
-  proposed Agent Forge Kernel / MyHarness Executor authority and F0-F7 gates;
+  Agent Forge Kernel / MyHarness Executor authority and F0-F7 gates;
 - [`2.0_ACCEPTANCE_MATRIX.md`](2.0_ACCEPTANCE_MATRIX.md) — traceable test,
   failure-injection, Windows, and release evidence requirements.
 

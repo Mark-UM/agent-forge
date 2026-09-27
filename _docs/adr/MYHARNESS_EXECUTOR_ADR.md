@@ -1,6 +1,6 @@
 # ADR: Agent Forge Kernel with a MyHarness Coding Executor
 
-Status: proposed for F0 review (documentation decision; no Executor is enabled).
+Status: F0 design decision (documentation only; no Executor is enabled).
 
 Date: 2026-09-27. Baseline: `main` at
 `4880c4b7b0b6a560bc89a2858bb892f9c26ffd3f` (Slice 3 and P2 merged).
