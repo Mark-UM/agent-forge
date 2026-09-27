@@ -25,6 +25,7 @@ from .execution_support import (
     _usage_dict,
     _within_after,
 )
+from .executors import invoke_executor
 from .permissions import PermissionRequest
 from .repository import (
     ClaimConflictError,
@@ -114,7 +115,7 @@ class KernelExecutionEngine(_ExecutionEngineBase):
                     try:
                         plan = self.coordinator.plan(
                             claimed,
-                            available_agent_ids=frozenset(self.runtimes),
+                            available_agent_ids=frozenset(self.executors),
                             permission_request=request,
                             tool_name=tool_name,
                             prefer_direct=prefer_direct,
@@ -173,13 +174,13 @@ class KernelExecutionEngine(_ExecutionEngineBase):
                                 permission_request=request,
                                 tool_name=tool_name,
                             )
-                            runtime = self.runtimes[selected.agent_id]
+                            executor = self.executors[selected.agent_id]
                             usage = _add_usage(usage, invocation)
                             try:
                                 with self._agent_slot(selected):
-                                    runtime_result = runtime.execute(command, token)
-                                if not isinstance(runtime_result, AgentResult):
-                                    raise TypeError("AgentRuntime must return AgentResult")
+                                    runtime_result = invoke_executor(
+                                        executor, command, token
+                                    )
                                 attempted_usage = _add_usage(usage, runtime_result.usage)
                                 if not attempted_usage.within(claimed.budget):
                                     usage, agent_result = self._runtime_budget_failure(

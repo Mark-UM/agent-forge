@@ -30,6 +30,16 @@ from .agents import (
 )
 from .coordinator import CoordinatorPlan, DeterministicCoordinator
 from .execution import ExecutionOutcome, KernelExecutionEngine
+from .executors import (
+    EXECUTOR_PROTOCOL_VERSION,
+    ExecutorCapabilities,
+    ExecutorEvent,
+    ExecutorHealth,
+    ExecutorRequest,
+    ExecutorResult,
+    ExecutorRuntime,
+    FakeExecutor,
+)
 from .execution_support import (
     AgentBusyError,
     AgentResultStatus,
@@ -102,6 +112,14 @@ __all__ = [
     "ExecutionError",
     "ExecutionMode",
     "ExecutionOutcome",
+    "EXECUTOR_PROTOCOL_VERSION",
+    "ExecutorCapabilities",
+    "ExecutorEvent",
+    "ExecutorHealth",
+    "ExecutorRequest",
+    "ExecutorResult",
+    "ExecutorRuntime",
+    "FakeExecutor",
     "FailureCategory",
     "FailureInfo",
     "Handoff",
