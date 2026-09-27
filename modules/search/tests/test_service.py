@@ -407,6 +407,27 @@ class TestErrorHandling:
         assert res.result is None
 
 
+def test_service_reports_redaction_failure_without_provider_or_raw_telemetry(monkeypatch):
+    import json
+    from modules.search import privacy
+
+    provider = FakeProvider()
+    service = SearchService(registry=_make_registry(provider))
+    def bad_redaction(query):
+        return query, {'error': 'redactor failed', 'redacted_count': 0}
+
+    monkeypatch.setattr(privacy, 'redact_outbound', bad_redaction)
+    response = service.search(SearchServiceRequest(
+        query='contact 13800138000', no_cache=True, verify=False,
+    ), record_run=True)
+
+    assert response.success is False
+    assert response.error == 'Outbound query redaction failed'
+    assert provider.calls == []
+    assert response.run is not None
+    assert '13800138000' not in json.dumps(response.run.to_dict())
+
+
 # ── Degraded mode tests ─────────────────────────────────────
 
 class TestDegradedMode:

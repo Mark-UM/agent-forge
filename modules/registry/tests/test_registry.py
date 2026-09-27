@@ -43,6 +43,46 @@ from modules.registry.health import (
 )
 
 
+
+def test_health_cli_json_passes_discovered_manifests(capsys):
+    """The public CLI must run health checks for its discovery report."""
+    from modules.registry.cli import main
+    from modules.registry.discovery import DiscoveryReport
+
+    manifest = CapabilityManifest(name="sample", version="1.0.0", description="")
+    status = HealthStatus(module_name="sample", overall="healthy")
+    report = DiscoveryReport(manifests=[manifest])
+    with patch("modules.registry.discovery.discover_modules_report", return_value=report):
+        with patch("modules.registry.health.run_health_checks",
+                   return_value={"sample": status}) as run_checks:
+            assert main(["health", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["modules"][0]["health"]["overall"] == "healthy"
+    run_checks.assert_called_once_with(modules=[manifest])
+
+
+
+def test_health_command_uses_current_interpreter():
+    manifest = CapabilityManifest(
+        name="python", version="1.0.0", description="",
+        health_checks=[HealthCheck(command='python -c "import sys; print(sys.executable)"')],
+    )
+    status = check_module_health(manifest)
+    assert status.overall == "healthy"
+    assert Path(status.checks[0].stdout.strip()).resolve() == Path(sys.executable).resolve()
+
+
+def test_health_command_decodes_invalid_utf8():
+    manifest = CapabilityManifest(
+        name="python", version="1.0.0", description="",
+        health_checks=[HealthCheck(command='python -c "import os; os.write(1, bytes([255]))"')],
+    )
+    status = check_module_health(manifest)
+    assert status.overall == "healthy"
+    assert "\ufffd" in status.checks[0].stdout
+
+
 # ── Schema validation tests ─────────────────────────────────
 
 class TestSchemaValidation:

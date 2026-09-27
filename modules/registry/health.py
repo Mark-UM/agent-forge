@@ -11,6 +11,7 @@ It does NOT import or call module code directly — health checks are black-box.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -82,12 +83,23 @@ def _run_single_check(check: HealthCheck, cwd: Path) -> HealthCheckResult:
 
     start = time.monotonic()
     try:
+        if check.command == 'python' or check.command.startswith('python '):
+            command = [sys.executable, *shlex.split(check.command)[1:]]
+            use_shell = False
+        else:
+            command = check.command
+            use_shell = True
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
         result = subprocess.run(
-            check.command,
-            shell=True,
+            command,
+            shell=use_shell,
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
+            env=env,
             timeout=check.timeout,
         )
         duration_ms = int((time.monotonic() - start) * 1000)

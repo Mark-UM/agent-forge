@@ -5,7 +5,7 @@ Replaces g-search MCP (Playwright-based, ToS-violating) with official Serper API
 (https://serper.dev). 2500 free queries/month, official Google partner, < 1s latency.
 
 设计原则：
-- 单文件独立模块，零外部依赖（仅 Python 标准库）
+- 可独立启动的 CLI/MCP 入口；部署时需保留同目录的 privacy.py 与 outbound_guard.py（仅 Python 标准库）
 - 核心函数 `serper_search()` 可作为库直接调用
 - MCP server：实现 JSON-RPC 2.0 over stdio 协议（initialize / tools/list / tools/call）
 - Layer 0 PII 脱敏：出境前对所有 query 做正则脱敏
@@ -44,8 +44,9 @@ try:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from privacy import redact_outbound as _redact_outbound
 except ImportError:
-    def _redact_outbound(query):
-        return query, {'redacted_count': 0}
+    _redact_outbound = None
+
+from outbound_guard import OutboundRedactionError, require_redacted_query
 
 
 # ── Constants ────────────────────────────────────────────────
@@ -96,9 +97,6 @@ def serper_search(query, api_key=None, num=DEFAULT_NUM, gl='us', hl='en',
             'error': 'Empty query',
         }
 
-    # 截断 query 避免超长请求
-    query = query[:MAX_QUERY_LEN]
-
     # 校验 num
     try:
         num = int(num)
@@ -108,6 +106,29 @@ def serper_search(query, api_key=None, num=DEFAULT_NUM, gl='us', hl='en',
             num = MAX_NUM
     except (ValueError, TypeError):
         num = DEFAULT_NUM
+
+    # Layer 0 PII 脱敏（出境前）
+    if redact:
+        try:
+            redacted_query, meta = require_redacted_query(query, _redact_outbound)
+        except OutboundRedactionError as exc:
+            return {
+            'success': False,
+            'query': '',
+            'results': [],
+            'count': 0,
+            'error': str(exc),
+            }
+        redacted_count = meta.get('redacted_count', 0)
+        if redacted_count > 0:
+            sys.stderr.write(
+                f"[serper] Layer 0 redacted {redacted_count} PII pattern(s); "
+                f"types: {meta.get('patterns_matched', [])}\n"
+            )
+        query = redacted_query
+
+    # Truncate only after full-query redaction, so PII cannot cross the limit.
+    query = query[:MAX_QUERY_LEN]
 
     # API key
     if api_key is None:
@@ -120,17 +141,6 @@ def serper_search(query, api_key=None, num=DEFAULT_NUM, gl='us', hl='en',
             'count': 0,
             'error': 'SERPER_API_KEY not set',
         }
-
-    # Layer 0 PII 脱敏（出境前）
-    if redact:
-        redacted_query, meta = _redact_outbound(query)
-        redacted_count = meta.get('redacted_count', 0)
-        if redacted_count > 0:
-            sys.stderr.write(
-                f"[serper] Layer 0 redacted {redacted_count} PII pattern(s); "
-                f"types: {meta.get('patterns_matched', [])}\n"
-            )
-        query = redacted_query
 
     # 构建请求 payload
     payload = {

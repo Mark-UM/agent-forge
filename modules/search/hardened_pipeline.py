@@ -73,7 +73,9 @@ class HardenedSearchPipeline(SearchPipeline):
         if not validation.success:
             return self._build_result()
 
-        self.normalize_query()
+        normalized = self.normalize_query()
+        if not normalized.success:
+            return self._build_result()
         self.plan_step()
 
         cache_hit = False

@@ -917,8 +917,13 @@ def service_health_check(args):
     print("## SearchService 层健康检查\n")
     print(f"  service: {status['service']}")
     print(f"  healthy: {'✓' if status['healthy'] else '✗'}")
+    provider_labels = [
+        f"{provider.get('name', '?')} ({provider.get('state', 'unknown')})"
+        if isinstance(provider, dict) else str(provider)
+        for provider in status['providers']
+    ]
     print(f"  providers ({status['provider_count']}): "
-          f"{', '.join(status['providers']) if status['providers'] else '(none)'}")
+          f"{', '.join(provider_labels) if provider_labels else '(none)'}")
     print(f"  cache_dir: {status['cache_dir']}")
     print(f"  cache_writable: {'✓' if status['cache_writable'] else '✗'}")
     print(f"  credentials:")

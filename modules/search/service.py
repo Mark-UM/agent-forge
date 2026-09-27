@@ -171,7 +171,7 @@ class SearchService:
             recorder = RunRecorder(
                 run_type="search",
                 metadata={
-                    "query": query,
+                    "query_length": len(query),
                     "mode": request.mode,
                     "language": request.language,
                     "no_cache": request.no_cache,
@@ -209,6 +209,10 @@ class SearchService:
                 degraded=degraded,
                 attempts=attempts,
             )
+            normalization = pipeline_result.step_reports.get("normalize_query")
+            redaction_failed = bool(normalization and not normalization.success)
+            if redaction_failed:
+                execution_status = "failed"
             serialized = pipeline_result.to_dict()
             serialized["provider_executions"] = attempts
             serialized["success"] = output_usable
@@ -229,7 +233,9 @@ class SearchService:
                 run_result = recorder.result
 
             error = None
-            if not output_usable:
+            if redaction_failed:
+                error = "Outbound query redaction failed"
+            elif not output_usable:
                 error = (
                     "all search providers failed"
                     if execution_status == "failed"

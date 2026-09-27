@@ -3,7 +3,7 @@
 
 设计原则：
 - 单文件独立模块，零外部依赖（仅 Python 标准库）
-- 失败时返回原 query，绝不抛异常
+- 失败时返回空字符串和 error，阻止原 query 出境
 - 7 种 PII 模式：邮箱、中国手机、身份证、马来手机、银行卡号、IP、地址关键词
 - 顺序敏感：specific pattern 先匹配，general pattern 后匹配
   - email 含 @ 符号最 specific
@@ -112,7 +112,7 @@ def redact_outbound(query):
 
     Returns:
         tuple: (redacted_query, metadata)
-            redacted_query: 脱敏后的查询；失败时返回原 query
+            redacted_query: 脱敏后的查询；失败时返回空字符串
             metadata: dict 包含：
                 - redacted_count (int): 总替换次数
                 - patterns_matched (list[str]): 命中的 pattern 名称（unique）
@@ -169,15 +169,15 @@ def redact_outbound(query):
                 redacted, count = pattern.subn(replacement, redacted)
                 redacted_count += count
     except Exception as e:
-        # 正则异常：返回原 query + 警告日志，不阻塞主流程
-        print(f"警告: PII 脱敏失败 ({type(e).__name__}: {e})，返回原 query",
+        # Do not return the original query when the redactor fails.
+        print(f"警告: PII 脱敏失败 ({type(e).__name__})，停止出境查询",
               file=sys.stderr)
-        return (query, {
+        return ('', {
             'redacted_count': 0,
             'patterns_matched': [],
             'original_length': original_length,
-            'redacted_length': original_length,
-            'error': f'{type(e).__name__}: {e}',
+            'redacted_length': 0,
+            'error': type(e).__name__,
         })
 
     return (redacted, {

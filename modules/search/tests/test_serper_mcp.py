@@ -188,6 +188,17 @@ class TestQueryTruncation(unittest.TestCase):
             body = json.loads(call_args.data.decode('utf-8'))
             self.assertEqual(len(body['q']), MAX_QUERY_LEN)
 
+    def test_sensitive_number_crossing_limit_is_redacted_before_truncation(self):
+        query = 'x' * (MAX_QUERY_LEN - 6) + ' 13800138000'
+        with patch('urllib.request.urlopen') as mock_urlopen:
+            mock_urlopen.return_value = _make_urlopen_success(_make_response())
+            serper_search(query)
+            request = mock_urlopen.call_args[0][0]
+            sent = json.loads(request.data.decode('utf-8'))['q']
+        self.assertLessEqual(len(sent), MAX_QUERY_LEN)
+        self.assertNotIn('13800', sent)
+        self.assertNotIn('13800138000', sent)
+
 
 # ── HTTP 成功路径 ─────────────────────────────────────────
 class TestSerperSearchSuccess(unittest.TestCase):

@@ -13,7 +13,10 @@ Run:
     python -m pytest modules/prompt/tests/test_prompt_references.py -v
 """
 import json
+import os
 import re
+import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -38,28 +41,65 @@ DEPRECATED_NAMES = {
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def _iter_md_files(root: Path) -> list:
-    """Yield all .md files under root (recursive, does NOT follow symlinks).
+def _is_reparse_point(path: Path) -> bool:
+    """Exclude symlinks and Windows Junctions from project-owned references."""
+    try:
+        attributes = getattr(os.lstat(path), 'st_file_attributes', 0)
+    except OSError:
+        return True
+    return os.path.islink(path) or bool(
+        attributes & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)
+    )
 
-    Uses os.walk(followlinks=False) to avoid broken symlink / reparse point
-    errors that rglob hits on Windows.
+
+def _iter_md_files(root: Path) -> list:
+    """Yield repository Markdown files, independent of ignored local assets.
+
+    Git-indexed paths are authoritative inside a checkout. A release archive
+    has no Git index, so its own directory tree is used instead.
     """
     if not root.exists():
         return []
-    import os
+    try:
+        project_root = PROJECT_ROOT.resolve(strict=True)
+        relative_root = root.resolve(strict=True).relative_to(project_root)
+        git_root = subprocess.run(
+            ['git', '-C', str(PROJECT_ROOT), 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, encoding='utf-8', check=True,
+        ).stdout.strip()
+        if Path(git_root).resolve(strict=True) != project_root:
+            raise ValueError('Git index belongs to a parent repository')
+        completed = subprocess.run(
+            ['git', '-C', str(PROJECT_ROOT), 'ls-files', '-z', '--',
+             relative_root.as_posix()],
+            capture_output=True, check=True,
+        )
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        completed = None
+    if completed is not None:
+        results = []
+        for raw_path in completed.stdout.split(b'\0'):
+            if not raw_path:
+                continue
+            path = PROJECT_ROOT / raw_path.decode('utf-8')
+            if path.suffix == '.md' and path.is_file():
+                results.append(path)
+        return sorted(results)
+
     results = []
+    excluded_dirs = {
+        'node_modules', 'vendor', 'anthropics-skills', 'mattpocock-skills',
+        'obra-superpowers', 'vercel-agent-skills',
+    }
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        # Skip symlinked directories entirely (external skill packs, etc.)
         dirnames[:] = [d for d in dirnames
-                       if not os.path.islink(os.path.join(dirpath, d))]
+                       if d not in excluded_dirs and
+                       not _is_reparse_point(Path(dirpath) / d)]
         for fname in sorted(filenames):
-            if fname.endswith(".md"):
-                p = Path(dirpath) / fname
-                try:
-                    p.stat()
-                    results.append(p)
-                except (OSError, FileNotFoundError):
-                    continue
+            if fname.endswith('.md'):
+                path = Path(dirpath) / fname
+                if path.is_file():
+                    results.append(path)
     return sorted(results)
 
 
@@ -77,12 +117,8 @@ def _iter_project_skills() -> list:
     for d in sorted(SKILLS_DIR.iterdir()):
         if not d.is_dir():
             continue
-        # Skip symlinks / reparse points that point to external packs
-        try:
-            if d.is_symlink():
-                continue
-        except (OSError, NotImplementedError):
-            pass
+        if _is_reparse_point(d):
+            continue
         if d.name.startswith(external_prefixes):
             continue
         # Skip aggregated external skill container dirs
@@ -166,6 +202,20 @@ def _configured_models() -> set:
                 models.update(provider_cfg["models"].keys())
     # Also accept string references like "deepseek/deepseek-v4-flash"
     return models
+
+
+def test_markdown_fallback_inside_parent_git_repository(tmp_path, monkeypatch):
+    """An unpacked release must inspect its own files inside another repo."""
+    parent = tmp_path / 'parent'
+    parent.mkdir()
+    subprocess.run(['git', 'init', '-q', str(parent)], check=True)
+    unpacked = parent / 'unpacked'
+    markdown = unpacked / '.opencode' / 'prompts' / 'example.md'
+    markdown.parent.mkdir(parents=True)
+    markdown.write_text('# Example\n', encoding='utf-8')
+    monkeypatch.setattr(sys.modules[__name__], 'PROJECT_ROOT', unpacked)
+
+    assert _iter_md_files(unpacked / '.opencode') == [markdown]
 
 
 # ── 1. Deprecated names must not appear ──────────────────────────────────

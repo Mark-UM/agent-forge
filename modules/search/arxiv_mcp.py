@@ -4,7 +4,7 @@
 arXiv API is free, no API key required. Returns Atom XML feed.
 
 设计原则：
-- 单文件独立模块，零外部依赖（仅 Python 标准库）
+- 可独立启动的 CLI/MCP 入口；部署时需保留同目录的 privacy.py 与 outbound_guard.py（仅 Python 标准库）
 - 核心函数 `arxiv_search()` 可作为库直接调用
 - MCP server：JSON-RPC 2.0 over stdio
 - Layer 0 PII 脱敏：出境前对所有 query 做正则脱敏
@@ -46,8 +46,9 @@ try:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from privacy import redact_outbound as _redact_outbound
 except ImportError:
-    def _redact_outbound(query):
-        return query, {'redacted_count': 0}
+    _redact_outbound = None
+
+from outbound_guard import OutboundRedactionError, require_redacted_query
 
 
 # ── Constants ────────────────────────────────────────────────
@@ -279,7 +280,18 @@ def arxiv_search(query, max_results=DEFAULT_MAX_RESULTS, category=None,
 
     # Layer 0 PII 脱敏
     if redact:
-        redacted_query, meta = _redact_outbound(query)
+        try:
+            redacted_query, meta = require_redacted_query(query, _redact_outbound)
+        except OutboundRedactionError as exc:
+            return {
+            'success': False,
+            'query': '',
+            'results': [],
+            'count': 0,
+            'total_results': 0,
+            'start_index': 0,
+            'error': str(exc),
+            }
         redacted_count = meta.get('redacted_count', 0)
         if redacted_count > 0:
             sys.stderr.write(
