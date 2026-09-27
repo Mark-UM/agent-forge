@@ -16,6 +16,8 @@ def test_collect_files_uses_git_index_and_keeps_safe_examples(tmp_path):
         '_data/memory/MEMORY.example.md': '# Example memory\n',
         'markconfig/secrets.example.json': '{"API_KEY": "placeholder"}\n',
         'markconfig/profile.md': '# Private profile\n',
+        'markconfig/personal.json': '{\"token\": \"private\"}\n',
+        '_data/notes/private.md': '# Private note\n',
     }
     for relative, content in tracked.items():
         path = tmp_path / relative
@@ -38,6 +40,8 @@ def test_collect_files_uses_git_index_and_keeps_safe_examples(tmp_path):
         '_data/memory/MEMORY.example.md',
     }
     assert ('markconfig/profile.md', 'excluded file: markconfig/profile.md') in excluded
+    assert any(path == 'markconfig/personal.json' for path, _ in excluded)
+    assert any(path == '_data/notes/private.md' for path, _ in excluded)
 
 
 def test_build_uses_committed_blob_when_worktree_contains_secret(tmp_path, monkeypatch):

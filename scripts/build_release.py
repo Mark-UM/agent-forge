@@ -79,6 +79,10 @@ SAFE_EXAMPLE_FILES = {
     '_data/memory/MEMORY.example.md',
     '_data/memory/README-INIT.md',
 }
+PRIVATE_TREE_ALLOWLIST = SAFE_EXAMPLE_FILES | {
+    'markconfig/README.md',
+    'markconfig/authority_whitelist.json',
+}
 
 # Glob patterns for exclusion (matched against basename or relative path)
 EXCLUDE_GLOBS = [
@@ -133,12 +137,16 @@ def _should_exclude(rel_path: str) -> tuple:
     """
     parts = Path(rel_path).parts
     rel_posix = Path(rel_path).as_posix()
-    if rel_posix in SAFE_EXAMPLE_FILES:
-        return False, ''
-
     # 1. Check exact file excludes
     if rel_posix in MANDATORY_EXCLUDE_FILES:
         return True, f'excluded file: {rel_posix}'
+
+    # Private trees ship only named public templates and configuration.
+    if (rel_posix.startswith(('markconfig/', '_data/')) and
+            rel_posix not in PRIVATE_TREE_ALLOWLIST):
+        return True, f'excluded private tree: {rel_posix}'
+    if rel_posix in SAFE_EXAMPLE_FILES:
+        return False, ''
 
     # 2. Check path prefix excludes (multi-level directories like _data/private)
     for prefix in MANDATORY_EXCLUDE_PREFIXES:
