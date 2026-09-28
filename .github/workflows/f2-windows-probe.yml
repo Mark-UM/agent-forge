@@ -1,9 +1,10 @@
 name: F2 Windows startup probe (experimental)
 
-# Branch-only CLI compatibility experiment on a disposable VM. It does not
-# satisfy the F2 OS isolation gate or authorize a production Executor.
+# Explicitly runnable CLI/Kernel demo on a disposable VM. It does not satisfy
+# the F2 OS isolation gate or authorize a production Executor.
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - agent/f2-windows-probe

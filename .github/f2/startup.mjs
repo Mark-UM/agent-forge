@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,6 +12,16 @@ mkdirSync(path.join(scratch, "AppData", "Roaming"), { recursive: true });
 mkdirSync(path.join(scratch, "AppData", "Local"), { recursive: true });
 
 const source = process.env.F2_SOURCE ?? path.join(root, "myharness");
+for (const [ref, expected] of [
+  ["HEAD", "5be723be1b5c34cae2abe6fea5718f0407f91760"],
+  ["HEAD^{tree}", "42e4195294ae1825c9025ccfe0a48d256814ce5d"],
+]) {
+  const result = spawnSync("git", ["-C", source, "rev-parse", ref], { encoding: "utf8", windowsHide: true, timeout: 5000 });
+  if (result.status !== 0 || result.stdout.trim() !== expected) throw new Error(`MyHarness ${ref} mismatch`);
+}
+for (const name of ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "f2-faux.ts"]) {
+  if (!existsSync(path.join(source, name))) throw new Error(`MyHarness ${name} missing`);
+}
 const cli = path.join(source, "packages", "coding-agent", "dist", "cli.js");
 const extension = path.join(source, "f2-faux.ts");
 const systemRoot = process.env.SystemRoot;
