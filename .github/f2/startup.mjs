@@ -55,6 +55,7 @@ let failure = null;
 const child = spawn(process.execPath, args, { cwd: workspace, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
 const stopTree = () => {
   if (child.pid) spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, timeout: 5000 });
+  if (!child.killed) child.kill();
 };
 const timer = setTimeout(() => { failure = "CLI exceeded 30 seconds"; stopTree(); }, 30000);
 for (const [stream, append] of [

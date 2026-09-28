@@ -135,13 +135,16 @@ class DemoMyHarnessExecutor:
         finally:
             if process.poll() is None:
                 if os.name == "nt":
-                    subprocess.run(
-                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=5,
-                        check=False,
-                    )
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=5,
+                            check=False,
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
                 if process.poll() is None:
                     process.kill()
                 process.communicate(timeout=5)
