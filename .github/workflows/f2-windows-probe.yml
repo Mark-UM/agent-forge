@@ -1,0 +1,51 @@
+name: F2 Windows startup probe (experimental)
+
+# Branch-only startup experiment. It does not satisfy the F2 acceptance matrix
+# or the complete before/after file and process inventories in F2 Entry Gates.
+
+on:
+  push:
+    branches:
+      - agent/f2-windows-probe
+
+permissions:
+  contents: read
+
+jobs:
+  exact-sha-json-cli:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Check out probe scripts without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out exact MyHarness candidate without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Mark-UM/MyHarness
+          ref: 5be723be1b5c34cae2abe6fea5718f0407f91760
+          path: myharness
+          persist-credentials: false
+
+      - name: Set up Node 22.22.1
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.1
+
+      - name: Install exact lock without lifecycle scripts and build
+        shell: powershell
+        working-directory: myharness
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run no-tool fixed-Provider probe in disposable Windows VM
+        shell: powershell
+        run: |
+          ./scripts/experiments/f2-windows-probe.ps1 `
+            -Source (Join-Path $env:GITHUB_WORKSPACE 'myharness') `
+            -Fixture (Join-Path $env:GITHUB_WORKSPACE '.github/f2/faux.ts')
