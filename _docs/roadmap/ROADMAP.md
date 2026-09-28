@@ -40,8 +40,9 @@ prerequisite.
 ## 2.0 — Lightweight Multi-Agent Kernel
 
 Status (2026-09-28): Slices 1-3, F0, and the F1 local Executor seam merged.
-F2 entry checks identified additional request and isolation gates. F2-F7 and
-the complete 2.0 release remain unfinished.
+F2 source/build preflight passed, but the exact-SHA Linux JSON CLI probe is
+blocked by Windows-only Workspace path semantics. F2-F7 and the complete 2.0
+release remain unfinished.
 
 2.0 design and acceptance documents:
 
