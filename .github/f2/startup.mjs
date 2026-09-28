@@ -1,16 +1,17 @@
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
-const root = process.env.GITHUB_WORKSPACE;
-const scratch = path.join(process.env.RUNNER_TEMP, "f2-startup");
+const root = process.env.GITHUB_WORKSPACE ?? process.cwd();
+const scratch = process.env.F2_SCRATCH ?? path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), "f2-startup");
 const workspace = path.join(scratch, "workspace");
 mkdirSync(workspace, { recursive: true });
 writeFileSync(path.join(workspace, "fixture.txt"), "disposable startup fixture\n");
 mkdirSync(path.join(scratch, "AppData", "Roaming"), { recursive: true });
 mkdirSync(path.join(scratch, "AppData", "Local"), { recursive: true });
 
-const source = path.join(root, "myharness");
+const source = process.env.F2_SOURCE ?? path.join(root, "myharness");
 const cli = path.join(source, "packages", "coding-agent", "dist", "cli.js");
 const extension = path.join(source, "f2-faux.ts");
 const systemRoot = process.env.SystemRoot;
@@ -33,7 +34,7 @@ const args = [
   "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
   "--offline", "--approve", "--extension", extension,
   "--provider", "f2-faux", "--model", "faux-1",
-  "Return the fixed fixture.",
+  process.env.F2_PROMPT ?? "Return the fixed fixture.",
 ];
 
 const limit = 131072;
@@ -86,15 +87,17 @@ if (!events.some((event) => event.type === "agent_end")) {
 if (events.some((event) => event.type?.startsWith("tool_execution_"))) {
   throw new Error("Unexpected tool execution event");
 }
-if (!stdout.includes("F2_FIXTURE_SUCCESS")) {
-  throw new Error("Fixed Provider response missing");
-}
+const assistant = events.filter((event) => event.type === "message_end" && event.message?.role === "assistant").at(-1);
+const assistantText = assistant?.message?.content?.filter((block) => block.type === "text")
+  .map((block) => block.text).join("");
+if (assistantText !== "F2_FIXTURE_SUCCESS") throw new Error("Fixed Provider response missing from final assistant message");
 console.log(JSON.stringify({
   sourceCommit: "5be723be1b5c34cae2abe6fea5718f0407f91760",
   jsonlEvents: events.length,
   outputBytes: bytes,
   eventTypes: [...new Set(events.map((event) => event.type))],
   fixedProviderReached: true,
+  assistantText,
   toolsExecuted: false,
   runtime: process.version,
 }));

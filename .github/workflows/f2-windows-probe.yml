@@ -54,3 +54,17 @@ jobs:
           Copy-Item .github/f2/faux.ts myharness/f2-faux.ts
           node .github/f2/startup.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Set up Python 3.11 for Kernel vertical slice
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Kernel to MyHarness fixed-Provider vertical slice
+        shell: powershell
+        run: |
+          python -m pip install APScheduler==3.11.3 tzdata==2026.3
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/experiments/kernel_myharness_vertical.py `
+            --source myharness --node (Get-Command node).Source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
