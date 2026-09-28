@@ -82,6 +82,14 @@ or oversized events, invalid result types, and budget/permission dimensions the
 Adapter cannot enforce. A deterministic FakeExecutor comes first; existing
 `DeterministicAgentRuntime` behavior stays compatible until migration is proven.
 
+The merged F1 local seam implements the versioned types, FakeExecutor, legacy
+adapter, handshake, cancellation precedence, and bounded result events. It does
+not yet carry a persisted Task-to-Workspace identity, path allowlist, expanded
+Executor budget dimensions, or an external process attempt identity. These
+remain required before the PoC can send a real AgentCommand to MyHarness and
+before any production Bridge can launch. The F2 source and isolation checks may
+proceed independently; their results do not close these contract gaps.
+
 F2 may use `myharness --mode json` in a disposable read-only experiment. JSONL
 is an observation format, not a permission boundary. F3 replaces that probe
 with a persistent Node SDK bridge only after the F2 failure matrix passes. The

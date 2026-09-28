@@ -39,9 +39,9 @@ prerequisite.
 
 ## 2.0 — Lightweight Multi-Agent Kernel
 
-Status (2026-09-28): Slices 1-3 and F0 merged. F1 defines the local Executor
-contract without enabling MyHarness. F2-F7 and the complete 2.0 release remain
-unfinished.
+Status (2026-09-28): Slices 1-3, F0, and the F1 local Executor seam merged.
+F2 entry checks identified additional request and isolation gates. F2-F7 and
+the complete 2.0 release remain unfinished.
 
 2.0 design and acceptance documents:
 
@@ -57,6 +57,8 @@ unfinished.
   Agent Forge Kernel / MyHarness Executor authority and F0-F7 gates;
 - [`2.0_F1_EXECUTOR_CONTRACT.md`](2.0_F1_EXECUTOR_CONTRACT.md) — typed F1
   Executor boundary, compatibility path, and deferred integration work;
+- [`2.0_F2_ENTRY_GATES.md`](2.0_F2_ENTRY_GATES.md) — exact source preflight,
+  contract gaps, OS isolation, and the read-only PoC acceptance sequence;
 - [`2.0_ACCEPTANCE_MATRIX.md`](2.0_ACCEPTANCE_MATRIX.md) — traceable test,
   failure-injection, Windows, and release evidence requirements.
 
