@@ -1,0 +1,71 @@
+name: F2 Windows startup probe (experimental)
+
+# Explicitly runnable CLI/Kernel demo on a disposable VM. It does not satisfy
+# the F2 OS isolation gate or authorize a production Executor.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/f2-windows-probe
+
+permissions:
+  contents: read
+
+jobs:
+  exact-sha-json-cli:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Check out probe scripts without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out exact MyHarness candidate without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Mark-UM/MyHarness
+          ref: 5be723be1b5c34cae2abe6fea5718f0407f91760
+          path: myharness
+          persist-credentials: false
+
+      - name: Set up Node 22.22.1
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.1
+
+      - name: Install exact lock without lifecycle scripts and build
+        shell: powershell
+        working-directory: myharness
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne '5be723be1b5c34cae2abe6fea5718f0407f91760') { throw 'Unexpected MyHarness commit' }
+          if ((git rev-parse 'HEAD^{tree}').Trim() -ne '42e4195294ae1825c9025ccfe0a48d256814ce5d') { throw 'Unexpected MyHarness tree' }
+          foreach ($name in @('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md')) {
+            if (-not (Test-Path $name)) { throw "Missing $name" }
+          }
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run fixed-Provider JSONL startup probe
+        shell: powershell
+        run: |
+          Copy-Item .github/f2/faux.ts myharness/f2-faux.ts
+          node .github/f2/startup.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Set up Python 3.11 for Kernel vertical slice
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Kernel to MyHarness fixed-Provider vertical slice
+        shell: powershell
+        run: |
+          python -m pip install APScheduler==3.11.3 tzdata==2026.3
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/experiments/kernel_myharness_vertical.py `
+            --source myharness --node (Get-Command node).Source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
