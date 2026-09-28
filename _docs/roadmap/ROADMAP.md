@@ -1,6 +1,6 @@
 # Agent Forge Roadmap
 
-Status date: 2026-09-27 (foundation evidence remains dated 2026-08-06).
+Status date: 2026-09-28 (foundation evidence remains dated 2026-08-06).
 
 This file contains unfinished product work. Archived proposals are design
 history, not delivery commitments.
@@ -39,8 +39,9 @@ prerequisite.
 
 ## 2.0 — Lightweight Multi-Agent Kernel
 
-Status (2026-09-27): Slices 1-3 merged; F0 Fusion ADR documented. F1-F7
-integration and the complete 2.0 release remain unfinished.
+Status (2026-09-28): Slices 1-3 and F0 merged. F1 defines the local Executor
+contract without enabling MyHarness. F2-F7 and the complete 2.0 release remain
+unfinished.
 
 2.0 design and acceptance documents:
 
@@ -54,6 +55,8 @@ integration and the complete 2.0 release remain unfinished.
   and PydanticAI PoC plan, retained as historical research;
 - [`../adr/MYHARNESS_EXECUTOR_ADR.md`](../adr/MYHARNESS_EXECUTOR_ADR.md) —
   Agent Forge Kernel / MyHarness Executor authority and F0-F7 gates;
+- [`2.0_F1_EXECUTOR_CONTRACT.md`](2.0_F1_EXECUTOR_CONTRACT.md) — typed F1
+  Executor boundary, compatibility path, and deferred integration work;
 - [`2.0_ACCEPTANCE_MATRIX.md`](2.0_ACCEPTANCE_MATRIX.md) — traceable test,
   failure-injection, Windows, and release evidence requirements.
 

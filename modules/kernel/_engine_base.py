@@ -29,6 +29,7 @@ from .execution_support import (
     _add_usage,
     _usage_dict,
 )
+from .executors import ExecutorRuntime, LegacyAgentRuntimeAdapter
 from .repository import TaskRepository
 
 
@@ -51,7 +52,7 @@ class _ExecutionEngineBase:
         self,
         repository: TaskRepository,
         coordinator: DeterministicCoordinator,
-        runtimes: Mapping[str, AgentRuntime],
+        runtimes: Mapping[str, AgentRuntime | ExecutorRuntime],
         *,
         lease_seconds: int = 300,
     ) -> None:
@@ -78,6 +79,16 @@ class _ExecutionEngineBase:
             )
         if any(not hasattr(runtime, "execute") for runtime in self.runtimes.values()):
             raise KernelContractError("each Agent runtime must expose execute()")
+        self.executors: dict[str, ExecutorRuntime] = {
+            agent_id: (
+                runtime
+                if isinstance(runtime, ExecutorRuntime)
+                else LegacyAgentRuntimeAdapter(
+                    runtime, capabilities=self._specs[agent_id].capabilities
+                )
+            )
+            for agent_id, runtime in self.runtimes.items()
+        }
 
     @contextmanager
     def _agent_slot(self, spec: AgentSpec) -> Iterator[None]:
