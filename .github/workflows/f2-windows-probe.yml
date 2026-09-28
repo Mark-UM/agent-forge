@@ -1,7 +1,7 @@
 name: F2 Windows startup probe (experimental)
 
-# Branch-only startup experiment. It does not satisfy the F2 acceptance matrix
-# or the complete before/after file and process inventories in F2 Entry Gates.
+# Branch-only CLI compatibility experiment on a disposable VM. It does not
+# satisfy the F2 OS isolation gate or authorize a production Executor.
 
 on:
   push:
@@ -38,14 +38,19 @@ jobs:
         shell: powershell
         working-directory: myharness
         run: |
+          if ((git rev-parse HEAD).Trim() -ne '5be723be1b5c34cae2abe6fea5718f0407f91760') { throw 'Unexpected MyHarness commit' }
+          if ((git rev-parse 'HEAD^{tree}').Trim() -ne '42e4195294ae1825c9025ccfe0a48d256814ce5d') { throw 'Unexpected MyHarness tree' }
+          foreach ($name in @('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md')) {
+            if (-not (Test-Path $name)) { throw "Missing $name" }
+          }
           npm ci --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Run no-tool fixed-Provider probe in disposable Windows VM
+      - name: Run fixed-Provider JSONL startup probe
         shell: powershell
         run: |
-          ./scripts/experiments/f2-windows-probe.ps1 `
-            -Source (Join-Path $env:GITHUB_WORKSPACE 'myharness') `
-            -Fixture (Join-Path $env:GITHUB_WORKSPACE '.github/f2/faux.ts')
+          Copy-Item .github/f2/faux.ts myharness/f2-faux.ts
+          node .github/f2/startup.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
