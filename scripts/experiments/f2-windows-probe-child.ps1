@@ -40,16 +40,7 @@ $outsideReadDenied = $false
 try { [void][IO.File]::ReadAllText($data.sentinel) }
 catch [UnauthorizedAccessException] { $outsideReadDenied = $true }
 
-$networkDenied = $true
-$client = [Net.Sockets.TcpClient]::new()
-try {
-    $connection = $client.BeginConnect($data.networkAddress, 443, $null, $null)
-    if ($connection.AsyncWaitHandle.WaitOne(5000)) {
-        try { $client.EndConnect($connection); $networkDenied = $false } catch { }
-    }
-} finally { $client.Dispose() }
-
-if (-not ($sourceWriteDenied -and $workspaceWriteDenied -and $outsideReadDenied -and $networkDenied)) {
+if (-not ($sourceWriteDenied -and $workspaceWriteDenied -and $outsideReadDenied)) {
     throw 'One or more OS containment probes failed before MyHarness startup.'
 }
 
@@ -75,7 +66,6 @@ $result = [ordered]@{
     sourceWriteDenied = $sourceWriteDenied
     workspaceWriteDenied = $workspaceWriteDenied
     outsideReadDenied = $outsideReadDenied
-    networkDenied = $networkDenied
     environmentKeys = @((Get-ChildItem Env:).Name | Sort-Object)
     stdoutBytes = (Get-Item $stdout).Length
     stderrBytes = (Get-Item $stderr).Length

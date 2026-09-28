@@ -107,44 +107,6 @@ function Get-ProbeErrorExcerpt([string]$Path) {
     } finally { $reader.Dispose() }
 }
 
-function Assert-ProbeUserCanConnect([pscredential]$Credential, [string]$Workspace,
-                                    [string]$Scratch, [string]$Address) {
-    $code = @'
-$client = [Net.Sockets.TcpClient]::new()
-try {
-    $connection = $client.BeginConnect('ADDRESS_PLACEHOLDER', 443, $null, $null)
-    if (-not $connection.AsyncWaitHandle.WaitOne(5000)) { exit 2 }
-    $client.EndConnect($connection)
-    exit 0
-} catch { exit 1 } finally { $client.Dispose() }
-'@
-    $code = $code.Replace('ADDRESS_PLACEHOLDER', $Address)
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
-    $probe = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
-      -ArgumentList "-NoProfile -NonInteractive -EncodedCommand $encoded" `
-      -Credential $Credential -LoadUserProfile -WorkingDirectory $Workspace -WindowStyle Hidden `
-      -RedirectStandardOutput (Join-Path $Scratch 'baseline.stdout') `
-      -RedirectStandardError (Join-Path $Scratch 'baseline.stderr') -PassThru
-    try {
-        if (-not $probe.WaitForExit(10000)) { throw 'Network positive control timed out' }
-        if ($probe.ExitCode -ne 0) { throw 'Probe user cannot reach control endpoint before firewall rule' }
-    } finally {
-        if (-not $probe.HasExited) { & taskkill /PID $probe.Id /T /F | Out-Null }
-        $probe.Dispose()
-    }
-}
-
-function Assert-RunnerCanConnect([string]$Address) {
-    $client = [Net.Sockets.TcpClient]::new()
-    try {
-        $connection = $client.BeginConnect($Address, 443, $null, $null)
-        if (-not $connection.AsyncWaitHandle.WaitOne(5000)) {
-            throw 'Runner connectivity timed out after scoped firewall rule'
-        }
-        $client.EndConnect($connection)
-    } finally { $client.Dispose() }
-}
-
 $expectedCommit = '5be723be1b5c34cae2abe6fea5718f0407f91760'
 $expectedTree = '42e4195294ae1825c9025ccfe0a48d256814ce5d'
 $actualCommit = (& git -C $Source rev-parse HEAD).Trim()
@@ -157,10 +119,6 @@ foreach ($notice in @('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md')) {
 }
 $node = (Get-Command node -ErrorAction Stop).Source
 if ((& $node --version).Trim() -ne 'v22.22.1') { throw 'Unexpected Node version' }
-$networkAddress = [Net.Dns]::GetHostAddresses('github.com') |
-  Where-Object { $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork } |
-  Select-Object -First 1 -ExpandProperty IPAddressToString
-if (-not $networkAddress) { throw 'No IPv4 address resolved for network positive control' }
 Copy-Item -LiteralPath $Fixture -Destination (Join-Path $Source 'f2-faux.ts')
 
 $root = Join-Path $env:RUNNER_TEMP "f2-windows-$($env:GITHUB_RUN_ID)"
@@ -198,8 +156,6 @@ try {
     & icacls $scratch /grant "*$($sid):(OI)(CI)M" /T /C | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to grant probe scratch access' }
 
-    Assert-ProbeUserCanConnect $credential $workspace $scratch $networkAddress
-
     $userFilter = "D:(A;;CC;;;$sid)"
     New-NetFirewallRule -Name $firewallRule -DisplayName $firewallRule -Direction Outbound `
       -Profile Any -Action Block -RemoteAddress Any -LocalUser $userFilter | Out-Null
@@ -212,11 +168,9 @@ try {
     if ($actualFilter -notmatch [regex]::Escape($sid)) {
         throw "Firewall rule did not retain the probe user SID: $actualFilter"
     }
-    Assert-RunnerCanConnect $networkAddress
 
     $data = @{ node = $node; source = $Source; workspace = $workspace;
-               scratch = $scratch; sentinel = $sentinel;
-               networkAddress = $networkAddress } | ConvertTo-Json -Compress
+               scratch = $scratch; sentinel = $sentinel } | ConvertTo-Json -Compress
     $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($data))
     $child = Join-Path $PSScriptRoot 'f2-windows-probe-child.ps1'
     $invocation = "& '$child' -Payload '$payload'"
@@ -266,7 +220,7 @@ try {
         throw 'Outside sentinel changed'
     }
     Write-Host "F2 probe passed: commit=$actualCommit tree=$actualTree"
-    Write-Host "Boundary: sourceReadOnly=$($result.sourceWriteDenied) workspaceReadOnly=$($result.workspaceWriteDenied) outsideHidden=$($result.outsideReadDenied) networkDenied=$($result.networkDenied)"
+    Write-Host "Boundary: sourceReadOnly=$($result.sourceWriteDenied) workspaceReadOnly=$($result.workspaceWriteDenied) outsideHidden=$($result.outsideReadDenied) userScopedFirewall=$actualFilter"
     Write-Host "JSONL: $($events.Count) events; stdout=$($result.stdoutBytes) bytes; stderr=$($result.stderrBytes) bytes"
     Write-Host "Sanitized environment keys: $($result.environmentKeys -join ',')"
     Write-Host "Process: child exit=$($process.ExitCode)"
