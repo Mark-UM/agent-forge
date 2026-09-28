@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -108,25 +109,51 @@ class DemoMyHarnessExecutor:
             F2_PROMPT=FIXED_PROMPT,
         )
         launcher = ROOT / ".github" / "f2" / "startup.mjs"
+        process = subprocess.Popen(
+            [str(self.node), str(launcher)],
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout = ""
+        timed_out = False
         try:
-            completed = subprocess.run(
-                [str(self.node), str(launcher)],
-                cwd=ROOT,
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=40,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
+            deadline = time.monotonic() + 40
+            while True:
+                cancellation.raise_if_cancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    stdout, _ = process.communicate(timeout=min(0.5, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        finally:
+            if process.poll() is None:
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                        check=False,
+                    )
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=5)
+        if timed_out:
             result = AgentResult.timed_out("fixed MyHarness demo timed out")
         else:
             cancellation.raise_if_cancelled()
-            if completed.returncode != 0 or len(completed.stdout) > 8192:
+            if process.returncode != 0 or len(stdout) > 8192:
                 result = AgentResult.failed("fixed MyHarness demo failed", code="demo_cli_failed")
             else:
                 try:
-                    data = json.loads(completed.stdout)
+                    data = json.loads(stdout)
                     valid = (
                         data.get("sourceCommit") == SOURCE_COMMIT
                         and data.get("assistantText") == FIXED_OUTPUT
