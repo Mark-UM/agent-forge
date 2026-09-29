@@ -8,15 +8,22 @@ Kernel-owned Task. The successful Windows runner evidence is recorded in
 
 ## Run in GitHub Actions
 
-After this workflow is on `main`, select **F2 Windows startup probe
+On `main`, select **F2 Windows startup probe
 (experimental)** and **Run workflow**. The job uses a disposable Windows VM,
 checks out the exact MyHarness commit, builds from its lock without lifecycle
-scripts, and runs both the JSONL startup probe and the Kernel vertical slice.
+scripts, runs bounded JSONL process failure tests, then runs both the JSONL
+startup probe and the Kernel vertical slice.
 No Provider credential or private data is needed.
 
 ## Run in a disposable local Windows checkout
 
 Use Python 3.11 and Node 22.22.1. From the Agent Forge repository root:
+
+```powershell
+node --test .github/f2/jsonl-probe.test.mjs
+```
+
+Then build the exact MyHarness checkout and run the vertical slice:
 
 ```powershell
 git clone https://github.com/Mark-UM/MyHarness.git myharness
@@ -34,7 +41,8 @@ The final line should print a JSON object containing `taskStatus: succeeded`
 and `result: F2_FIXTURE_SUCCESS`. The demo verifies the source commit and tree
 before execution. It uses disposable input and does not need a real model.
 
-This demo does not enforce a read-only Workspace, block network egress, or
-exercise the F2 failure matrix. Run it only in a disposable checkout without
-private data or production credentials. It is not enabled as a production
+This demo does not enforce a read-only Workspace or block network egress. Its
+synthetic process tests cover only part of the F2 failure matrix. Run it only
+in a disposable checkout without private data or production credentials. It is
+not enabled as a production
 Executor; F3 remains behind the F2 gates.
