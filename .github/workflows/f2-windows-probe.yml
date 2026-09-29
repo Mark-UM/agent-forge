@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - agent/f2-windows-probe
+      - agent/f2-process-matrix
 
 permissions:
   contents: read
@@ -34,6 +35,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.22.1
+
+      - name: Exercise bounded JSONL process failure matrix
+        run: node --test .github/f2/jsonl-probe.test.mjs
 
       - name: Install exact lock without lifecycle scripts and build
         shell: powershell

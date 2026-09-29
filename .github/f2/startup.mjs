@@ -1,7 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runJsonlProbe } from "./jsonl-probe.mjs";
 
 const root = process.env.GITHUB_WORKSPACE ?? process.cwd();
 const scratch = process.env.F2_SCRATCH ?? path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), "f2-startup");
@@ -47,68 +48,16 @@ const args = [
   process.env.F2_PROMPT ?? "Return the fixed fixture.",
 ];
 
-const limit = 131072;
-let bytes = 0;
-let stdout = "";
-let stderr = "";
-let failure = null;
-const child = spawn(process.execPath, args, { cwd: workspace, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-const stopTree = () => {
-  if (child.pid) spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, timeout: 5000 });
-  if (!child.killed) child.kill();
-};
-const timer = setTimeout(() => { failure = "CLI exceeded 30 seconds"; stopTree(); }, 30000);
-for (const [stream, append] of [
-  [child.stdout, (text) => { stdout += text; }],
-  [child.stderr, (text) => { stderr += text; }],
-]) {
-  stream.on("data", (chunk) => {
-    if (failure) return;
-    bytes += chunk.length;
-    if (bytes > limit) {
-      failure = "CLI output exceeded 128 KiB";
-      stopTree();
-      return;
-    }
-    append(chunk.toString("utf8"));
-  });
-}
-
-let exitCode;
-try {
-  exitCode = await new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", resolve);
-  });
-} finally { clearTimeout(timer); }
-if (failure) throw new Error(failure);
-if (exitCode !== 0) throw new Error(`CLI exit ${exitCode}: ${stderr.slice(0, 2048)}`);
-
-const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
-const events = lines.map((line) => JSON.parse(line));
-if (events.some((event) => !event || typeof event.type !== "string")) {
-  throw new Error("JSONL event has no string type");
-}
-if (events.length < 2 || events[0].type !== "session" || events[0].version !== 3) {
-  throw new Error("Missing JSONL v3 session header");
-}
-if (!events.some((event) => event.type === "agent_end")) {
-  throw new Error("Missing terminal agent_end event");
-}
-if (events.some((event) => event.type?.startsWith("tool_execution_"))) {
-  throw new Error("Unexpected tool execution event");
-}
-const assistant = events.filter((event) => event.type === "message_end" && event.message?.role === "assistant").at(-1);
-const assistantText = assistant?.message?.content?.filter((block) => block.type === "text")
-  .map((block) => block.text).join("");
-if (assistantText !== "F2_FIXTURE_SUCCESS") throw new Error("Fixed Provider response missing from final assistant message");
+const result = await runJsonlProbe({
+  executable: process.execPath,
+  args,
+  cwd: workspace,
+  env,
+  expectedText: "F2_FIXTURE_SUCCESS",
+});
 console.log(JSON.stringify({
   sourceCommit: "5be723be1b5c34cae2abe6fea5718f0407f91760",
-  jsonlEvents: events.length,
-  outputBytes: bytes,
-  eventTypes: [...new Set(events.map((event) => event.type))],
+  ...result,
   fixedProviderReached: true,
-  assistantText,
-  toolsExecuted: false,
   runtime: process.version,
 }));
