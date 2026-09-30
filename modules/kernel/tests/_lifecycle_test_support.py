@@ -3,14 +3,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from modules.kernel.contracts import BudgetLimit
+from modules.kernel.contracts import BudgetLimit, WorkspaceBinding
 from modules.kernel.lifecycle import LifecycleRepository
 
 
 NOW = datetime(2026, 8, 6, 16, 0, tzinfo=timezone.utc)
 
 
-def running_task(repo: LifecycleRepository, *, owner: str = "coordinator"):
+def running_task(
+    repo: LifecycleRepository,
+    *,
+    owner: str = "coordinator",
+    workspace: WorkspaceBinding | None = None,
+):
     # Task captures utc_now_iso as its default factory. Freeze that clock so
     # creation and the subsequent claim share the same logical time.
     with patch("modules.kernel.contracts.datetime", wraps=datetime) as clock:
@@ -20,6 +25,7 @@ def running_task(repo: LifecycleRepository, *, owner: str = "coordinator"):
             normalized_input={"path": "work/note.txt"},
             idempotency_key=f"create-{owner}",
             owner_agent_id=owner,
+            workspace=workspace,
         )
     assert created
     claimed, _ = repo.claim_task(

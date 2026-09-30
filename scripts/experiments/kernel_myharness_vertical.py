@@ -36,6 +36,7 @@ from modules.kernel import (  # noqa: E402
     PermissionScope,
     TaskRepository,
     TaskStatus,
+    WorkspaceBinding,
 )
 
 SOURCE_COMMIT = "5be723be1b5c34cae2abe6fea5718f0407f91760"
@@ -85,6 +86,8 @@ class DemoMyHarnessExecutor:
             or command.permission_request != PermissionRequest()
             or command.normalized_input != {"text": FIXED_PROMPT}
             or command.attempt != 1
+            or request.workspace is None
+            or request.workspace.root != str((self.scratch / "workspace").resolve())
         ):
             return ExecutorResult(
                 EXECUTOR_PROTOCOL_VERSION,
@@ -107,6 +110,7 @@ class DemoMyHarnessExecutor:
             F2_SOURCE=str(self.source),
             F2_SCRATCH=str(self.scratch),
             F2_PROMPT=FIXED_PROMPT,
+            F2_WORKSPACE=request.workspace.root,
         )
         launcher = ROOT / ".github" / "f2" / "startup.mjs"
         process = subprocess.Popen(
@@ -207,6 +211,8 @@ def main() -> int:
 
     with TemporaryDirectory(prefix="agentforge-myharness-f2-") as directory:
         scratch = Path(directory)
+        workspace = scratch / "workspace"
+        workspace.mkdir()
         repository = TaskRepository(scratch / "kernel.db")
         task, created = repository.create_task(
             objective="Return the fixed MyHarness fixture through Kernel",
@@ -214,6 +220,7 @@ def main() -> int:
             idempotency_key="f2-fixed-provider-demo",
             required_capabilities=(CAPABILITY,),
             budget=BudgetLimit(wall_clock_seconds=60),
+            workspace=WorkspaceBinding.capture("f2.disposable", workspace),
         )
         if not created:
             raise RuntimeError("demo Task was not created")

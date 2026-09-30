@@ -18,6 +18,7 @@ from .contracts import (
     FailureInfo,
     Task,
     TaskStatus,
+    WorkspaceBinding,
     canonical_json,
     new_id,
     normalise_json_value,
@@ -27,7 +28,7 @@ from .state import TASK_TERMINAL, InvalidTransitionError, validate_task_transiti
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = PROJECT_ROOT / "_runtime" / "kernel" / "kernel.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """
 CREATE TABLE kernel_schema_migrations (
@@ -81,6 +82,10 @@ CREATE TABLE kernel_task_checkpoints (
 CREATE INDEX idx_kernel_checkpoints_task ON kernel_task_checkpoints(task_id, task_version);
 """.strip()
 _SCHEMA_CHECKSUM = hashlib.sha256(_SCHEMA_SQL.encode("utf-8")).hexdigest()
+_WORKSPACE_MIGRATION_SQL = "ALTER TABLE kernel_tasks ADD COLUMN workspace_json TEXT"
+_WORKSPACE_MIGRATION_CHECKSUM = hashlib.sha256(
+    _WORKSPACE_MIGRATION_SQL.encode("utf-8")
+).hexdigest()
 
 
 class KernelRepositoryError(RuntimeError):
@@ -138,22 +143,37 @@ class TaskRepository:
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kernel_schema_migrations'"
                 ).fetchone()
                 if not exists:
-                    connection.executescript(_SCHEMA_SQL)
+                    for statement in _SCHEMA_SQL.split(";"):
+                        if statement.strip():
+                            connection.execute(statement)
                     connection.execute(
                         "INSERT INTO kernel_schema_migrations(version, checksum, applied_at) VALUES (?, ?, ?)",
-                        (SCHEMA_VERSION, _SCHEMA_CHECKSUM, utc_now_iso()),
+                        (1, _SCHEMA_CHECKSUM, utc_now_iso()),
                     )
-                else:
-                    rows = connection.execute(
-                        "SELECT version, checksum FROM kernel_schema_migrations ORDER BY version"
-                    ).fetchall()
-                    if not rows:
-                        raise KernelRepositoryError("kernel migration ledger is empty")
-                    latest = rows[-1]
-                    if int(latest["version"]) > SCHEMA_VERSION:
-                        raise KernelRepositoryError("kernel database schema is newer than this code")
-                    if int(latest["version"]) != SCHEMA_VERSION or latest["checksum"] != _SCHEMA_CHECKSUM:
-                        raise KernelRepositoryError("kernel schema version/checksum mismatch")
+                rows = connection.execute(
+                    "SELECT version, checksum FROM kernel_schema_migrations ORDER BY version"
+                ).fetchall()
+                if not rows:
+                    raise KernelRepositoryError("kernel migration ledger is empty")
+                versions = [(int(row["version"]), row["checksum"]) for row in rows]
+                expected = [(1, _SCHEMA_CHECKSUM), (2, _WORKSPACE_MIGRATION_CHECKSUM)]
+                if versions[-1][0] > SCHEMA_VERSION:
+                    raise KernelRepositoryError("kernel database schema is newer than this code")
+                if versions != expected[: len(versions)]:
+                    raise KernelRepositoryError("kernel schema version/checksum mismatch")
+                columns = {
+                    row["name"] for row in connection.execute("PRAGMA table_info(kernel_tasks)")
+                }
+                if "task_id" not in columns or (len(versions) == 1 and "workspace_json" in columns):
+                    raise KernelRepositoryError("kernel task schema does not match migration ledger")
+                if len(versions) == 1:
+                    connection.execute(_WORKSPACE_MIGRATION_SQL)
+                    connection.execute(
+                        "INSERT INTO kernel_schema_migrations(version, checksum, applied_at) VALUES (?, ?, ?)",
+                        (2, _WORKSPACE_MIGRATION_CHECKSUM, utc_now_iso()),
+                    )
+                elif "workspace_json" not in columns:
+                    raise KernelRepositoryError("kernel task schema does not match migration ledger")
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -197,6 +217,10 @@ class TaskRepository:
             parent_task_id=row["parent_task_id"],
             objective=row["objective"],
             normalized_input=self._loads(row["normalized_input_json"], {}),
+            workspace=(
+                WorkspaceBinding(**json.loads(row["workspace_json"]))
+                if row["workspace_json"] else None
+            ),
             status=TaskStatus(row["status"]),
             owner_agent_id=row["owner_agent_id"],
             required_capabilities=tuple(self._loads(row["required_capabilities_json"], [])),
@@ -244,8 +268,8 @@ class TaskRepository:
                 current_step, artifact_ids_json, approval_ids_json, run_id, created_at,
                 updated_at, started_at, finished_at, failure_json, degraded_json,
                 idempotency_scope, idempotency_key, request_digest, record_version,
-                claim_owner, claim_token, claim_expires_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                claim_owner, claim_token, claim_expires_at, workspace_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 task.task_id, task.parent_task_id, task.objective,
                 canonical_json(task.normalized_input), task.status.value,
@@ -258,6 +282,7 @@ class TaskRepository:
                 canonical_json(self._degraded_dict(task.degraded)) if task.degraded else None,
                 task.idempotency_scope, task.idempotency_key, request_digest,
                 task.record_version, task.claim_owner, task.claim_token, task.claim_expires_at,
+                canonical_json(task.workspace.to_dict()) if task.workspace else None,
             ),
         )
 
@@ -273,6 +298,7 @@ class TaskRepository:
             canonical_json(self._failure_dict(task.failure)) if task.failure else None,
             canonical_json(self._degraded_dict(task.degraded)) if task.degraded else None,
             task.record_version, task.claim_owner, task.claim_token, task.claim_expires_at,
+            canonical_json(task.workspace.to_dict()) if task.workspace else None,
             task.task_id, expected_version,
         )
         cursor = connection.execute(
@@ -281,7 +307,8 @@ class TaskRepository:
                 owner_agent_id=?, required_capabilities_json=?, budget_json=?,
                 budget_used_json=?, current_step=?, artifact_ids_json=?, approval_ids_json=?,
                 run_id=?, updated_at=?, started_at=?, finished_at=?, failure_json=?,
-                degraded_json=?, record_version=?, claim_owner=?, claim_token=?, claim_expires_at=?
+                degraded_json=?, record_version=?, claim_owner=?, claim_token=?, claim_expires_at=?,
+                workspace_json=?
                WHERE task_id=? AND record_version=?""",
             values,
         )
@@ -328,28 +355,31 @@ class TaskRepository:
         required_capabilities: tuple[str, ...] = (),
         budget: BudgetLimit | None = None,
         owner_agent_id: str | None = None,
+        workspace: WorkspaceBinding | None = None,
         task_id: str | None = None,
     ) -> tuple[Task, bool]:
-        self.initialize()
+        if workspace is not None:
+            if not isinstance(workspace, WorkspaceBinding):
+                raise KernelRepositoryError("workspace must be WorkspaceBinding")
         candidate = Task(
             task_id=task_id or new_id("task"), objective=objective,
             normalized_input=normalized_input, parent_task_id=parent_task_id,
             required_capabilities=required_capabilities, budget=budget or BudgetLimit(),
             owner_agent_id=owner_agent_id, idempotency_scope=idempotency_scope,
-            idempotency_key=idempotency_key,
+            idempotency_key=idempotency_key, workspace=workspace,
         )
-        request_digest = hashlib.sha256(
-            canonical_json(
-                {
-                    "objective": candidate.objective,
-                    "normalized_input": candidate.normalized_input,
-                    "parent_task_id": candidate.parent_task_id,
-                    "required_capabilities": list(candidate.required_capabilities),
-                    "budget": self._budget_dict(candidate.budget),
-                    "owner_agent_id": candidate.owner_agent_id,
-                }
-            ).encode("utf-8")
-        ).hexdigest()
+        request_payload = {
+            "objective": candidate.objective,
+            "normalized_input": candidate.normalized_input,
+            "parent_task_id": candidate.parent_task_id,
+            "required_capabilities": list(candidate.required_capabilities),
+            "budget": self._budget_dict(candidate.budget),
+            "owner_agent_id": candidate.owner_agent_id,
+        }
+        if candidate.workspace is not None:
+            request_payload["workspace"] = candidate.workspace.to_dict()
+        request_digest = hashlib.sha256(canonical_json(request_payload).encode("utf-8")).hexdigest()
+        self.initialize()
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -362,6 +392,8 @@ class TaskRepository:
                         raise IdempotencyConflictError("idempotency key was reused for a different request")
                     connection.commit()
                     return self._row_to_task(row), False
+                if candidate.workspace is not None:
+                    candidate.workspace.validate_current()
                 self._insert_task(connection, candidate, request_digest)
                 self._insert_checkpoint(connection, candidate, payload={"event": "created"})
                 connection.commit()

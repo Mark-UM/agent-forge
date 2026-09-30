@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Callable, Protocol, runtime_checkable
 
 from .agents import AgentCommand, AgentResult, AgentRuntime, CancellationToken
-from .contracts import MAX_ITEMS, FailureCategory, KernelContractError, normalise_json_value
+from .contracts import MAX_ITEMS, FailureCategory, KernelContractError, WorkspaceBinding, normalise_json_value
 from .execution_support import _identifier
 
 
@@ -66,6 +66,7 @@ class ExecutorRequest:
     protocol_version: int
     request_id: str
     command: AgentCommand
+    workspace: WorkspaceBinding | None = None
 
     def __post_init__(self) -> None:
         _protocol_version(self.protocol_version)
@@ -74,6 +75,8 @@ class ExecutorRequest:
             raise KernelContractError("executor request command must be AgentCommand")
         if self.request_id != self.command.command_id:
             raise KernelContractError("executor request_id must match command_id")
+        if self.workspace is not None and not isinstance(self.workspace, WorkspaceBinding):
+            raise KernelContractError("executor request workspace must be WorkspaceBinding")
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +211,8 @@ def invoke_executor(
     executor: ExecutorRuntime,
     command: AgentCommand,
     cancellation: CancellationToken,
+    *,
+    workspace: WorkspaceBinding | None = None,
 ) -> AgentResult:
     """Validate the handshake and exact response before reducing Task state."""
 
@@ -232,7 +237,9 @@ def invoke_executor(
         raise KernelContractError(
             "executor lacks required capabilities: " + ", ".join(missing)
         )
-    request = ExecutorRequest(EXECUTOR_PROTOCOL_VERSION, command.command_id, command)
+    if workspace is not None:
+        workspace.validate_current()
+    request = ExecutorRequest(EXECUTOR_PROTOCOL_VERSION, command.command_id, command, workspace)
     cancellation.raise_if_cancelled()
     response = executor.execute(request, cancellation)
     cancellation.raise_if_cancelled()

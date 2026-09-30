@@ -1,6 +1,7 @@
 # ADR: Agent Forge Kernel with a MyHarness Coding Executor
 
-Status: F0 design decision (documentation only; no Executor is enabled).
+Status: F0 decision; F1 seam and F2 fixed-Provider demo exist, with production
+Executor disabled.
 
 Date: 2026-09-27. Baseline: `main` at
 `4880c4b7b0b6a560bc89a2858bb892f9c26ffd3f` (Slice 3 and P2 merged).
@@ -29,8 +30,10 @@ that runtime while retaining Task state transitions
 ([execution.py](../../modules/kernel/execution.py)). Slice 3 added persisted
 Handoff, Artifact, Approval, and domain audit authority
 ([Slice 3 ADR](../roadmap/2.0_SLICE3_LIFECYCLE_ADR.md)). Its Artifact API still
-accepts a trusted caller's `workspace_root`; Task-to-Workspace binding, real
-write execution, a Reviewer loop, and full budget accounting are future work.
+accepts a trusted caller's `workspace_root`; a later Kernel slice adds a Task
+Workspace identity for Executor requests and gates file Artifact access for
+bound Tasks. Real write execution, a Reviewer loop, and full budget accounting
+are future work.
 
 The [original 2.0 plan](../roadmap/2.0_EXECUTION_PLAN.md) predates these
 merges. The [framework PoC plan](../roadmap/2.0_FRAMEWORK_POC.md) did not select
@@ -83,12 +86,15 @@ Adapter cannot enforce. A deterministic FakeExecutor comes first; existing
 `DeterministicAgentRuntime` behavior stays compatible until migration is proven.
 
 The merged F1 local seam implements the versioned types, FakeExecutor, legacy
-adapter, handshake, cancellation precedence, and bounded result events. It does
-not yet carry a persisted Task-to-Workspace identity, path allowlist, expanded
-Executor budget dimensions, or an external process attempt identity. These
-remain required before the PoC can send a real AgentCommand to MyHarness and
-before any production Bridge can launch. The F2 source and isolation checks may
-proceed independently; their results do not close these contract gaps.
+adapter, handshake, cancellation precedence, and bounded result events. A
+subsequent Kernel slice persists Task-to-Workspace identity and passes it to
+the Executor request. File Artifact access for bound Tasks fails closed until
+an OS-isolated or handle-safe access path exists. It does not yet carry a
+read-only path allowlist, expanded Executor budget dimensions, or an external
+process attempt identity. These remain required before a real
+AgentCommand can be sent to MyHarness and before any production Bridge can
+launch. The F2 source and isolation checks may proceed independently; their
+results do not close these contract gaps.
 
 F2 may use `myharness --mode json` in a disposable read-only experiment. JSONL
 is an observation format, not a permission boundary. F3 replaces that probe

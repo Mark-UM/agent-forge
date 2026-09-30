@@ -40,6 +40,13 @@ from ._lifecycle_base import (
 
 
 class ArtifactRepositoryMixin(LifecycleRepositoryBase):
+    @staticmethod
+    def _reject_bound_artifact_access(task: Task) -> None:
+        if task.workspace is not None:
+            raise ArtifactIntegrityError(
+                "Task-bound Artifact file access requires an OS-isolated Workspace"
+            )
+
     def register_file_artifact(
         self,
         *,
@@ -65,6 +72,10 @@ class ArtifactRepositoryMixin(LifecycleRepositoryBase):
         self.initialize()
         now_iso = _timestamp(now)
         normalized_reference = _normalise_reference(reference)
+        task = self.get_task(task_id)
+        if task is None:
+            raise LifecycleRecordNotFoundError(f"Task not found: {task_id}")
+        self._reject_bound_artifact_access(task)
         resolved = _resolve_workspace_file(workspace_root, normalized_reference)
         digest = Artifact.digest_file(resolved)
         if expected_digest is not None and expected_digest != digest:
@@ -267,6 +278,8 @@ class ArtifactRepositoryMixin(LifecycleRepositoryBase):
                     raise ConcurrencyConflictError("stale Artifact version")
                 validate_artifact_transition(current.validation_status, target_status)
                 if target_status not in {ArtifactStatus.INVALIDATED, ArtifactStatus.SUPERSEDED}:
+                    task = self._task_in_tx(connection, current.task_id)
+                    self._reject_bound_artifact_access(task)
                     path = _resolve_workspace_file(workspace_root, current.reference)
                     actual_digest = Artifact.digest_file(path)
                     if actual_digest != current.digest:
@@ -308,6 +321,10 @@ class ArtifactRepositoryMixin(LifecycleRepositoryBase):
         artifact = self.get_artifact(artifact_id)
         if artifact is None:
             raise LifecycleRecordNotFoundError(f"Artifact not found: {artifact_id}")
+        task = self.get_task(artifact.task_id)
+        if task is None:
+            raise LifecycleRecordNotFoundError(f"Task not found: {artifact.task_id}")
+        self._reject_bound_artifact_access(task)
         path = _resolve_workspace_file(workspace_root, artifact.reference)
         return Artifact.digest_file(path) == artifact.digest
 
