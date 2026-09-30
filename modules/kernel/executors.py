@@ -9,7 +9,7 @@ from .contracts import MAX_ITEMS, FailureCategory, KernelContractError, Workspac
 from .execution_support import _identifier
 
 
-EXECUTOR_PROTOCOL_VERSION = 1
+EXECUTOR_PROTOCOL_VERSION = 2
 EXECUTOR_EVENT_TYPES = frozenset(
     {
         "executor.started",
@@ -66,11 +66,13 @@ class ExecutorRequest:
     protocol_version: int
     request_id: str
     command: AgentCommand
+    attempt_id: str
     workspace: WorkspaceBinding | None = None
 
     def __post_init__(self) -> None:
         _protocol_version(self.protocol_version)
         object.__setattr__(self, "request_id", _identifier(self.request_id, "request_id"))
+        object.__setattr__(self, "attempt_id", _identifier(self.attempt_id, "attempt_id"))
         if not isinstance(self.command, AgentCommand):
             raise KernelContractError("executor request command must be AgentCommand")
         if self.request_id != self.command.command_id:
@@ -212,6 +214,7 @@ def invoke_executor(
     command: AgentCommand,
     cancellation: CancellationToken,
     *,
+    attempt_id: str,
     workspace: WorkspaceBinding | None = None,
 ) -> AgentResult:
     """Validate the handshake and exact response before reducing Task state."""
@@ -239,7 +242,9 @@ def invoke_executor(
         )
     if workspace is not None:
         workspace.validate_current()
-    request = ExecutorRequest(EXECUTOR_PROTOCOL_VERSION, command.command_id, command, workspace)
+    request = ExecutorRequest(
+        EXECUTOR_PROTOCOL_VERSION, command.command_id, command, attempt_id, workspace
+    )
     cancellation.raise_if_cancelled()
     response = executor.execute(request, cancellation)
     cancellation.raise_if_cancelled()

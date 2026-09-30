@@ -70,7 +70,7 @@ class KernelExecutionEngine(_ExecutionEngineBase):
                 task, token=token, correlation_id=correlation_id
             )
         try:
-            claimed, _ = self.repository.claim_task(
+            claimed, claim_checkpoint = self.repository.claim_task(
                 task.task_id,
                 claimant=self.coordinator.coordinator.agent_id,
                 expected_version=task.record_version,
@@ -81,6 +81,8 @@ class KernelExecutionEngine(_ExecutionEngineBase):
             raise DuplicateExecutionError(
                 f"task {task.task_id} is already owned by another executor"
             ) from exc
+
+        attempt_id = claim_checkpoint.payload["executor_attempt_id"]
 
         usage = claimed.budget_used
         plan: CoordinatorPlan | None = None
@@ -93,6 +95,7 @@ class KernelExecutionEngine(_ExecutionEngineBase):
                 "task_id": claimed.task_id,
                 "owner_agent_id": self.coordinator.coordinator.agent_id,
                 "attempt": 1,
+                "executor_attempt_id": attempt_id,
                 "authority": "kernel.sqlite",
             },
         )
@@ -179,7 +182,11 @@ class KernelExecutionEngine(_ExecutionEngineBase):
                             try:
                                 with self._agent_slot(selected):
                                     runtime_result = invoke_executor(
-                                        executor, command, token, workspace=claimed.workspace
+                                        executor,
+                                        command,
+                                        token,
+                                        attempt_id=attempt_id,
+                                        workspace=claimed.workspace,
                                     )
                                 attempted_usage = _add_usage(usage, runtime_result.usage)
                                 if not attempted_usage.within(claimed.budget):
@@ -219,6 +226,7 @@ class KernelExecutionEngine(_ExecutionEngineBase):
         checkpoint_payload: dict[str, Any] = {
             "event": "execution_terminal",
             "run_id": correlation_id,
+            "executor_attempt_id": attempt_id,
             "task_status": terminal.value,
             "plan": plan.telemetry() if plan else None,
             "agent_result": agent_result.checkpoint_summary(),

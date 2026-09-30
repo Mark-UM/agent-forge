@@ -499,6 +499,8 @@ class TaskRepository:
         self.initialize()
         claimed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         with closing(self._connect()) as connection:
+            # The claim and attempt ID must survive power loss before an external launch.
+            connection.execute("PRAGMA synchronous = FULL")
             connection.execute("BEGIN IMMEDIATE")
             try:
                 row = connection.execute("SELECT * FROM kernel_tasks WHERE task_id=?", (task_id,)).fetchone()
@@ -527,7 +529,11 @@ class TaskRepository:
                 checkpoint = self._insert_checkpoint(
                     connection,
                     next_task,
-                    payload={"event": "claimed", "run_id": correlated_run_id},
+                    payload={
+                        "event": "claimed",
+                        "run_id": correlated_run_id,
+                        "executor_attempt_id": new_id("attempt"),
+                    },
                 )
                 connection.commit()
                 return next_task, checkpoint

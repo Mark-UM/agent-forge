@@ -111,6 +111,7 @@ class DemoMyHarnessExecutor:
             F2_SCRATCH=str(self.scratch),
             F2_PROMPT=FIXED_PROMPT,
             F2_WORKSPACE=request.workspace.root,
+            F2_ATTEMPT_ID=request.attempt_id,
         )
         launcher = ROOT / ".github" / "f2" / "startup.mjs"
         process = subprocess.Popen(
@@ -163,6 +164,7 @@ class DemoMyHarnessExecutor:
                     data = json.loads(stdout)
                     valid = (
                         data.get("sourceCommit") == SOURCE_COMMIT
+                        and data.get("attemptId") == request.attempt_id
                         and data.get("assistantText") == FIXED_OUTPUT
                         and data.get("fixedProviderReached") is True
                         and data.get("toolsExecuted") is False

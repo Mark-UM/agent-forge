@@ -58,6 +58,7 @@ const result = await runJsonlProbe({
 });
 console.log(JSON.stringify({
   sourceCommit: "5be723be1b5c34cae2abe6fea5718f0407f91760",
+  attemptId: process.env.F2_ATTEMPT_ID ?? null,
   ...result,
   fixedProviderReached: true,
   runtime: process.version,
