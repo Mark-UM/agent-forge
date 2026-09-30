@@ -1,14 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runJsonlProbe } from "./jsonl-probe.mjs";
 
 const root = process.env.GITHUB_WORKSPACE ?? process.cwd();
 const scratch = process.env.F2_SCRATCH ?? path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), "f2-startup");
-const workspace = path.resolve(process.env.F2_WORKSPACE ?? path.join(scratch, "workspace"));
-if (workspace !== path.resolve(scratch, "workspace")) throw new Error("F2 Workspace binding mismatch");
-mkdirSync(workspace, { recursive: true });
+const expectedWorkspace = path.join(scratch, "workspace");
+mkdirSync(expectedWorkspace, { recursive: true });
+const workspace = process.env.F2_WORKSPACE ?? expectedWorkspace;
+const expectedIdentity = statSync(expectedWorkspace, { bigint: true });
+const boundIdentity = statSync(workspace, { bigint: true });
+if (expectedIdentity.dev !== boundIdentity.dev || expectedIdentity.ino !== boundIdentity.ino) {
+  throw new Error("F2 Workspace binding mismatch");
+}
 writeFileSync(path.join(workspace, "fixture.txt"), "disposable startup fixture\n");
 mkdirSync(path.join(scratch, "AppData", "Roaming"), { recursive: true });
 mkdirSync(path.join(scratch, "AppData", "Local"), { recursive: true });
@@ -58,6 +63,7 @@ const result = await runJsonlProbe({
 });
 console.log(JSON.stringify({
   sourceCommit: "5be723be1b5c34cae2abe6fea5718f0407f91760",
+  attemptId: process.env.F2_ATTEMPT_ID ?? null,
   ...result,
   fixedProviderReached: true,
   runtime: process.version,

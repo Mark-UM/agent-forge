@@ -46,7 +46,7 @@ def test_fake_executor_runs_through_kernel_without_taking_task_authority(
     assert outcome.task.owner_agent_id == coordinator.agent_id
     assert len(executor.calls) == 1
     request = executor.calls[0]
-    assert request.protocol_version == 1
+    assert request.protocol_version == 2
     assert request.request_id == request.command.command_id
     assert request.command.task_id == task.task_id
     assert isinstance(executor.last_result, ExecutorResult)
@@ -55,9 +55,9 @@ def test_fake_executor_runs_through_kernel_without_taking_task_authority(
 @pytest.mark.parametrize(
     ("available", "capabilities", "protocol_version", "expected_code"),
     [
-        (False, ("text.edit",), 1, "executor_unavailable"),
-        (True, (), 1, "contract_invalid"),
-        (True, ("text.edit",), 2, "contract_invalid"),
+        (False, ("text.edit",), 2, "executor_unavailable"),
+        (True, (), 2, "contract_invalid"),
+        (True, ("text.edit",), 1, "contract_invalid"),
     ],
 )
 def test_executor_handshake_fails_before_side_effect(
@@ -102,7 +102,7 @@ def test_mismatched_executor_result_cannot_succeed_task(tmp_path: Path) -> None:
         "worker.text", AgentRole.WORKER, capabilities=("text.edit",)
     )
     executor = FakeExecutor(
-        ExecutorResult(1, "other-request", AgentResult.succeeded({"result": "wrong"})),
+        ExecutorResult(2, "other-request", AgentResult.succeeded({"result": "wrong"})),
         capabilities=("text.edit",),
     )
     engine = KernelExecutionEngine(
@@ -123,7 +123,7 @@ def test_mismatched_executor_result_cannot_succeed_task(tmp_path: Path) -> None:
 def test_executor_event_sequence_must_not_skip_or_change_request() -> None:
     with pytest.raises(KernelContractError, match="sequence must be contiguous"):
         ExecutorResult(
-            1,
+            2,
             "request-1",
             AgentResult.succeeded({"result": "done"}),
             events=(ExecutorEvent("request-1", 2, "executor.started"),),
@@ -131,7 +131,7 @@ def test_executor_event_sequence_must_not_skip_or_change_request() -> None:
 
     with pytest.raises(KernelContractError, match="request_id mismatch"):
         ExecutorResult(
-            1,
+            2,
             "request-1",
             AgentResult.succeeded({"result": "done"}),
             events=(ExecutorEvent("request-2", 1, "executor.started"),),
@@ -145,10 +145,10 @@ def test_executor_events_reject_unbounded_input_before_iteration() -> None:
 
     result = AgentResult.succeeded({"result": "done"})
     with pytest.raises(KernelContractError, match="bounded sequence"):
-        ExecutorResult(1, "request-1", result, events=UnsafeIterable())
+        ExecutorResult(2, "request-1", result, events=UnsafeIterable())
     event = ExecutorEvent("request-1", 1, "executor.started")
     with pytest.raises(KernelContractError, match="bounded sequence"):
-        ExecutorResult(1, "request-1", result, events=(event,) * 1_001)
+        ExecutorResult(2, "request-1", result, events=(event,) * 1_001)
 
 
 def test_cancellation_during_handshake_prevents_executor_call(tmp_path: Path) -> None:

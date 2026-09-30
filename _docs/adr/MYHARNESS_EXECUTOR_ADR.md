@@ -89,9 +89,11 @@ The merged F1 local seam implements the versioned types, FakeExecutor, legacy
 adapter, handshake, cancellation precedence, and bounded result events. A
 subsequent Kernel slice persists Task-to-Workspace identity and passes it to
 the Executor request. File Artifact access for bound Tasks fails closed until
-an OS-isolated or handle-safe access path exists. It does not yet carry a
-read-only path allowlist, expanded Executor budget dimensions, or an external
-process attempt identity. These remain required before a real
+an OS-isolated or handle-safe access path exists. Protocol v2 persists an
+external attempt identity with the claim and passes it through Executor
+requests; process deduplication and crash reconciliation remain open. It does
+not yet carry a read-only path allowlist or expanded Executor budget
+dimensions. These remain required before a real
 AgentCommand can be sent to MyHarness and before any production Bridge can
 launch. The F2 source and isolation checks may proceed independently; their
 results do not close these contract gaps.

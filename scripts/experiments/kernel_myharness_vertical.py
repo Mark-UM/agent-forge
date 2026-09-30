@@ -111,6 +111,7 @@ class DemoMyHarnessExecutor:
             F2_SCRATCH=str(self.scratch),
             F2_PROMPT=FIXED_PROMPT,
             F2_WORKSPACE=request.workspace.root,
+            F2_ATTEMPT_ID=request.attempt_id,
         )
         launcher = ROOT / ".github" / "f2" / "startup.mjs"
         process = subprocess.Popen(
@@ -122,6 +123,7 @@ class DemoMyHarnessExecutor:
             text=True,
         )
         stdout = ""
+        stderr = ""
         timed_out = False
         try:
             deadline = time.monotonic() + 40
@@ -132,7 +134,7 @@ class DemoMyHarnessExecutor:
                     timed_out = True
                     break
                 try:
-                    stdout, _ = process.communicate(timeout=min(0.5, remaining))
+                    stdout, stderr = process.communicate(timeout=min(0.5, remaining))
                     break
                 except subprocess.TimeoutExpired:
                     continue
@@ -157,12 +159,18 @@ class DemoMyHarnessExecutor:
         else:
             cancellation.raise_if_cancelled()
             if process.returncode != 0 or len(stdout) > 8192:
-                result = AgentResult.failed("fixed MyHarness demo failed", code="demo_cli_failed")
+                code = (
+                    "demo_workspace_mismatch"
+                    if "F2 Workspace binding mismatch" in stderr
+                    else "demo_cli_failed"
+                )
+                result = AgentResult.failed("fixed MyHarness demo failed", code=code)
             else:
                 try:
                     data = json.loads(stdout)
                     valid = (
                         data.get("sourceCommit") == SOURCE_COMMIT
+                        and data.get("attemptId") == request.attempt_id
                         and data.get("assistantText") == FIXED_OUTPUT
                         and data.get("fixedProviderReached") is True
                         and data.get("toolsExecuted") is False
@@ -210,7 +218,7 @@ def main() -> int:
     verify_source(source)
 
     with TemporaryDirectory(prefix="agentforge-myharness-f2-") as directory:
-        scratch = Path(directory)
+        scratch = Path(directory).resolve(strict=True)
         workspace = scratch / "workspace"
         workspace.mkdir()
         repository = TaskRepository(scratch / "kernel.db")
@@ -234,7 +242,11 @@ def main() -> int:
         )
         outcome = engine.execute_task(task.task_id, prefer_direct=False)
         if outcome.task.status is not TaskStatus.SUCCEEDED or not outcome.agent_result:
-            raise RuntimeError(f"Kernel/MyHarness demo failed: {outcome.task.status.value}")
+            failure = outcome.agent_result.failure if outcome.agent_result else None
+            failure_code = failure.code if failure else "missing_result"
+            raise RuntimeError(
+                f"Kernel/MyHarness demo failed: {outcome.task.status.value} ({failure_code})"
+            )
         print(json.dumps({
             "taskStatus": outcome.task.status.value,
             "executorProtocol": EXECUTOR_PROTOCOL_VERSION,
