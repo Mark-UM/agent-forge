@@ -123,6 +123,7 @@ class DemoMyHarnessExecutor:
             text=True,
         )
         stdout = ""
+        stderr = ""
         timed_out = False
         try:
             deadline = time.monotonic() + 40
@@ -133,7 +134,7 @@ class DemoMyHarnessExecutor:
                     timed_out = True
                     break
                 try:
-                    stdout, _ = process.communicate(timeout=min(0.5, remaining))
+                    stdout, stderr = process.communicate(timeout=min(0.5, remaining))
                     break
                 except subprocess.TimeoutExpired:
                     continue
@@ -158,7 +159,12 @@ class DemoMyHarnessExecutor:
         else:
             cancellation.raise_if_cancelled()
             if process.returncode != 0 or len(stdout) > 8192:
-                result = AgentResult.failed("fixed MyHarness demo failed", code="demo_cli_failed")
+                code = (
+                    "demo_workspace_mismatch"
+                    if "F2 Workspace binding mismatch" in stderr
+                    else "demo_cli_failed"
+                )
+                result = AgentResult.failed("fixed MyHarness demo failed", code=code)
             else:
                 try:
                     data = json.loads(stdout)
@@ -212,7 +218,7 @@ def main() -> int:
     verify_source(source)
 
     with TemporaryDirectory(prefix="agentforge-myharness-f2-") as directory:
-        scratch = Path(directory)
+        scratch = Path(directory).resolve(strict=True)
         workspace = scratch / "workspace"
         workspace.mkdir()
         repository = TaskRepository(scratch / "kernel.db")
