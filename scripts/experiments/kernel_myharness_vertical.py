@@ -236,7 +236,11 @@ def main() -> int:
         )
         outcome = engine.execute_task(task.task_id, prefer_direct=False)
         if outcome.task.status is not TaskStatus.SUCCEEDED or not outcome.agent_result:
-            raise RuntimeError(f"Kernel/MyHarness demo failed: {outcome.task.status.value}")
+            failure = outcome.agent_result.failure if outcome.agent_result else None
+            failure_code = failure.code if failure else "missing_result"
+            raise RuntimeError(
+                f"Kernel/MyHarness demo failed: {outcome.task.status.value} ({failure_code})"
+            )
         print(json.dumps({
             "taskStatus": outcome.task.status.value,
             "executorProtocol": EXECUTOR_PROTOCOL_VERSION,
