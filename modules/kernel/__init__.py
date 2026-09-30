@@ -20,6 +20,7 @@ from .contracts import (
     Sensitivity,
     Task,
     TaskStatus,
+    WorkspaceBinding,
 )
 from .agents import (
     AgentCommand,
@@ -147,4 +148,5 @@ __all__ = [
     "TaskNotFoundError",
     "TaskRepository",
     "TaskStatus",
+    "WorkspaceBinding",
 ]

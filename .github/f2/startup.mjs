@@ -6,7 +6,8 @@ import { runJsonlProbe } from "./jsonl-probe.mjs";
 
 const root = process.env.GITHUB_WORKSPACE ?? process.cwd();
 const scratch = process.env.F2_SCRATCH ?? path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), "f2-startup");
-const workspace = path.join(scratch, "workspace");
+const workspace = path.resolve(process.env.F2_WORKSPACE ?? path.join(scratch, "workspace"));
+if (workspace !== path.resolve(scratch, "workspace")) throw new Error("F2 Workspace binding mismatch");
 mkdirSync(workspace, { recursive: true });
 writeFileSync(path.join(workspace, "fixture.txt"), "disposable startup fixture\n");
 mkdirSync(path.join(scratch, "AppData", "Roaming"), { recursive: true });

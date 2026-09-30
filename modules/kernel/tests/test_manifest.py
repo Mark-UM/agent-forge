@@ -52,7 +52,7 @@ def test_kernel_schema_has_a_versioned_checksum(tmp_path: Path) -> None:
             "SELECT version, checksum FROM kernel_schema_migrations ORDER BY version DESC LIMIT 1"
         ).fetchone()
     assert row is not None
-    assert row[0] == 1
+    assert row[0] == 2
     assert len(row[1]) == 64
     int(row[1], 16)
 

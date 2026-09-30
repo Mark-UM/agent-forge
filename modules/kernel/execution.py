@@ -179,7 +179,7 @@ class KernelExecutionEngine(_ExecutionEngineBase):
                             try:
                                 with self._agent_slot(selected):
                                     runtime_result = invoke_executor(
-                                        executor, command, token
+                                        executor, command, token, workspace=claimed.workspace
                                     )
                                 attempted_usage = _add_usage(usage, runtime_result.usage)
                                 if not attempted_usage.within(claimed.budget):

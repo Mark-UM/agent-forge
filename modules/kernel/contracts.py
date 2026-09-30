@@ -298,6 +298,57 @@ class PermissionScope:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceBinding:
+    """Trusted caller's directory identity, persisted by Kernel with a Task."""
+
+    workspace_id: str
+    root: str
+    device: int
+    inode: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "workspace_id", _name(self.workspace_id, "workspace_id"))
+        if not isinstance(self.root, str) or not Path(self.root).is_absolute():
+            raise KernelContractError("workspace root must be an absolute path")
+        for name in ("device", "inode"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise KernelContractError(f"workspace {name} must be a non-negative integer")
+
+    @classmethod
+    def capture(cls, workspace_id: str, root: str | Path) -> "WorkspaceBinding":
+        try:
+            resolved = Path(root).resolve(strict=True)
+            if not resolved.is_dir():
+                raise KernelContractError("workspace root must be a directory")
+            identity = resolved.stat()
+        except (OSError, RuntimeError) as exc:
+            raise KernelContractError("workspace root is unavailable") from exc
+        return cls(workspace_id, str(resolved), identity.st_dev, identity.st_ino)
+
+    def validate_current(self) -> None:
+        try:
+            resolved = Path(self.root).resolve(strict=True)
+            identity = resolved.stat()
+        except (OSError, RuntimeError) as exc:
+            raise KernelContractError("workspace root is unavailable") from exc
+        if (
+            not resolved.is_dir()
+            or str(resolved) != self.root
+            or (identity.st_dev, identity.st_ino) != (self.device, self.inode)
+        ):
+            raise KernelContractError("workspace root identity changed")
+
+    def to_dict(self) -> dict[str, str | int]:
+        return {
+            "workspace_id": self.workspace_id,
+            "root": self.root,
+            "device": self.device,
+            "inode": self.inode,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Task:
     task_id: str
     objective: str
@@ -324,6 +375,7 @@ class Task:
     claim_owner: str | None = None
     claim_token: str | None = None
     claim_expires_at: str | None = None
+    workspace: WorkspaceBinding | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, TaskStatus):
@@ -331,6 +383,8 @@ class Task:
         object.__setattr__(self, "task_id", _name(self.task_id, "task_id"))
         object.__setattr__(self, "objective", _text(self.objective, "objective", 4_000))
         object.__setattr__(self, "normalized_input", normalise_json_value(self.normalized_input, field_name="normalized_input"))
+        if self.workspace is not None and not isinstance(self.workspace, WorkspaceBinding):
+            raise KernelContractError("workspace must be WorkspaceBinding")
         object.__setattr__(self, "idempotency_scope", _name(self.idempotency_scope, "idempotency_scope"))
         object.__setattr__(self, "idempotency_key", _name(self.idempotency_key, "idempotency_key"))
         for name in ("parent_task_id", "owner_agent_id", "current_step", "run_id"):
@@ -373,8 +427,9 @@ class Task:
         data = {
             name: getattr(self, name)
             for name in self.__dataclass_fields__
-            if name not in {"budget", "budget_used", "failure", "degraded", "claim_token"}
+            if name not in {"budget", "budget_used", "failure", "degraded", "claim_token", "workspace"}
         }
+        data["workspace"] = self.workspace.to_dict() if self.workspace else None
         data["status"] = self.status.value
         data["budget"] = {name: getattr(self.budget, name) for name in self.budget.__dataclass_fields__}
         data["budget_used"] = {name: getattr(self.budget_used, name) for name in self.budget_used.__dataclass_fields__}
